@@ -21,11 +21,34 @@ export function getVipDeviceId(): string {
   } catch {}
 
   try {
+    const native = (window as any).LocateGoNative;
+    if (native && typeof native.getDeviceId === 'function') {
+      const nativeId = native.getDeviceId();
+      if (nativeId && typeof nativeId === 'string' && nativeId.trim().length > 0) {
+        const cleaned = nativeId.trim();
+        localStorage.setItem('vip_device_id', cleaned);
+        localStorage.setItem('locate_device_id', cleaned);
+        return cleaned;
+      }
+    }
+  } catch {}
+
+  try {
+    const locateId = localStorage.getItem('locate_device_id');
+    if (locateId && locateId.trim().length > 0) {
+      const cleaned = locateId.trim();
+      localStorage.setItem('vip_device_id', cleaned);
+      return cleaned;
+    }
+  } catch {}
+
+  try {
     const hw = navigator.hardwareConcurrency || 8;
     const uaLen = navigator.userAgent.length || 120;
     const gen = (uaLen + btoa(String(hw))).slice(0, 10);
     try {
       localStorage.setItem('vip_device_id', gen);
+      localStorage.setItem('locate_device_id', gen);
     } catch {}
     return gen;
   } catch {
@@ -42,7 +65,7 @@ export function isAuthorizedDevice(codeUsedBy: string | undefined | null, client
     return true; // كود جديد لم يُربط بجهاز بعد
   }
 
-  const normalizedUsedBy = codeUsedBy.trim();
+  const cleanTarget = codeUsedBy.trim().replace(/[\u200B-\u200F\uFEFF\u202A-\u202E\s]/g, '').toUpperCase();
   const vipId = getVipDeviceId();
   let savedVipId: string | null = null;
   let savedLocateId: string | null = null;
@@ -66,14 +89,15 @@ export function isAuthorizedDevice(codeUsedBy: string | undefined | null, client
     typeof window !== 'undefined' ? getActiveDeviceId() : null,
   ].filter((id): id is string => typeof id === 'string' && id.trim().length > 0);
 
+  const normTarget = cleanTarget.replace(/^=+|=+$/g, '').replace(/O/g, '0').replace(/[^A-Z0-9]/g, '');
+
   for (const candidate of candidates) {
-    const c = candidate.trim();
-    if (c === normalizedUsedBy) return true;
-    if (c.toUpperCase() === normalizedUsedBy.toUpperCase()) return true;
-    // مقارنة تنظيف الحروف والرموز
-    const cClean = c.toUpperCase().replace(/[^A-Z0-9]/g, '');
-    const uClean = normalizedUsedBy.toUpperCase().replace(/[^A-Z0-9]/g, '');
-    if (cClean.length > 0 && cClean === uClean) return true;
+    const c = candidate.trim().replace(/[\u200B-\u200F\uFEFF\u202A-\u202E\s]/g, '').toUpperCase();
+    if (c === cleanTarget) return true;
+    const normC = c.replace(/^=+|=+$/g, '').replace(/O/g, '0').replace(/[^A-Z0-9]/g, '');
+    if (normC && normTarget && (normC === normTarget || normC.includes(normTarget) || normTarget.includes(normC))) {
+      return true;
+    }
   }
 
   return false;
@@ -87,49 +111,44 @@ export function getActiveDeviceId(): string {
     return 'DEV-HOST-NODE';
   }
 
-  // 1. التحقق التلقائي من تطبيق أندرويد الأصيل عبر الـ Native Bridge (Settings.Secure.ANDROID_ID)
+  // 1. التحقق التلقائي من تطبيق أندرويد الأصيل عبر الـ Native Bridge
   try {
     const native = (window as any).LocateGoNative;
     if (native && typeof native.getDeviceId === 'function') {
       const nativeId = native.getDeviceId();
       if (nativeId && typeof nativeId === 'string' && nativeId.trim().length > 0) {
-        const cleaned = nativeId.trim().toUpperCase();
+        const cleaned = nativeId.trim();
         localStorage.setItem('locate_device_id', cleaned);
+        localStorage.setItem('vip_device_id', cleaned);
         return cleaned;
       }
     }
-  } catch {
-    // تجاهل والنزول للتخزين المحلي المستمر
-  }
-
-  // 2. التحقق من المعرف المحفوظ مسبقاً لهذا الجهاز
-  try {
-    const savedId = localStorage.getItem('locate_device_id');
-    if (savedId && savedId.trim().length > 0) {
-      return savedId.trim().toUpperCase();
-    }
   } catch {}
 
-  // 3. التحقق من معرف VIP المحفوظ مسبقاً إن وجد
+  // 2. التحقق من معرف VIP المحفوظ مسبقاً
   try {
     const vipDevId = localStorage.getItem('vip_device_id');
     if (vipDevId && vipDevId.trim().length > 0) {
-      const cleaned = vipDevId.trim().toUpperCase();
+      const cleaned = vipDevId.trim();
       localStorage.setItem('locate_device_id', cleaned);
       return cleaned;
     }
   } catch {}
 
-  // 4. توليد معرف عتاد أندرويد حقيقي ثابت وفريد لهذا الجهاز (16 Hex Digits - Android ID Format)
-  const part1 = Math.floor(Math.random() * 0xFFFFFFFF).toString(16).padStart(8, '0').toUpperCase();
-  const part2 = Math.floor(Math.random() * 0xFFFFFFFF).toString(16).padStart(8, '0').toUpperCase();
-  const newDeviceId = `AND-${part1.slice(0, 4)}-${part2.slice(0, 4)}`;
-
+  // 3. التحقق من المعرف المحفوظ مسبقاً لهذا الجهاز
   try {
-    localStorage.setItem('locate_device_id', newDeviceId);
+    const savedId = localStorage.getItem('locate_device_id');
+    if (savedId && savedId.trim().length > 0) {
+      return savedId.trim();
+    }
   } catch {}
 
-  return newDeviceId;
+  // 4. استدعاء getVipDeviceId لضمان التطابق التام
+  const vipDefault = getVipDeviceId();
+  try {
+    localStorage.setItem('locate_device_id', vipDefault);
+  } catch {}
+  return vipDefault;
 }
 
 /**

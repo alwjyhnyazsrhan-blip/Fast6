@@ -52,10 +52,10 @@
             <h1 class="text-xl font-extrabold text-white tracking-tight">Locate Go</h1>
             <span class="text-[11px] font-bold px-2 py-0.5 rounded-md bg-emerald-950 text-emerald-300 border border-emerald-500/30 flex items-center gap-1">
               <i data-lucide="database" class="w-3 h-3 text-emerald-400"></i>
-              <span>فايربيس أوفلاين</span>
+              <span>قاعدة بيانات Firebase السحابية</span>
             </span>
           </div>
-          <p class="text-xs text-slate-400">لوحة تحكم وإدارة وتوليد أكواد الاشتراكات المتصلة بقاعدة بيانات Firebase</p>
+          <p class="text-xs text-slate-400">لوحة تحكم وتوليد أكواد الاشتراكات المتصلة مباشرة بـ appprotector-79e9c</p>
         </div>
       </div>
 
@@ -519,21 +519,23 @@
       }
     }
 
-    function saveOfflineCache(codesList) {
+    // ----------------------------------------------------
+    // الحفظ المباشر في قاعدة بيانات Firebase السحابية دون تخزين محلي
+    // ----------------------------------------------------
+    function saveOfflineCache(_codesList) {
+      // بناءً على طلب المشرف: عدم حفظ أكواد الاشتراك في التخزين المحلي (LocalStorage)
+      // جميع الأكواد تعتمد حصرياً على الحفظ السحابي في قاعدة بيانات Firebase RTDB
       try {
-        localStorage.setItem(STORAGE_KEYS.OFFLINE_CODES, JSON.stringify(codesList));
-      } catch (err) {
-        console.warn('LocalStorage quota or write error:', err);
-      }
+        localStorage.removeItem(STORAGE_KEYS.OFFLINE_CODES);
+      } catch {}
     }
 
     function loadOfflineCache() {
+      // إفراغ التخزين المحلي والاعتماد فقط على الجلب المباشر من قاعدة البيانات السحابية
       try {
-        const raw = localStorage.getItem(STORAGE_KEYS.OFFLINE_CODES);
-        return raw ? JSON.parse(raw) : [];
-      } catch {
-        return [];
-      }
+        localStorage.removeItem(STORAGE_KEYS.OFFLINE_CODES);
+      } catch {}
+      return [];
     }
 
     // ----------------------------------------------------
@@ -812,7 +814,8 @@
     async function handleCreateSubmit(e) {
       e.preventDefault();
       const code = document.getElementById('form-code').value.trim().toUpperCase();
-      const targetDeviceId = document.getElementById('form-device-id').value.trim().toUpperCase();
+      const rawTarget = document.getElementById('form-device-id').value.trim();
+      const targetDeviceId = rawTarget.replace(/[\u200B-\u200F\uFEFF\u202A-\u202E\s]/g, '').toUpperCase();
       const driverName = document.getElementById('form-driver-name').value.trim();
       const driverPhone = document.getElementById('form-driver-phone').value.trim();
       const startMode = document.querySelector('input[name="startMode"]:checked').value;

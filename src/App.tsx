@@ -27,9 +27,26 @@ export default function App() {
   const [deviceId, setDeviceIdState] = useState<string>(getActiveDeviceId());
   const [currentLang, setCurrentLang] = useState<Language>('ar');
   const [isAccessibilityEnabled, setIsAccessibilityEnabled] = useState<boolean>(false);
-  const [activePlanName, setActivePlanName] = useState<string>('تجربة 3 أيام');
+  const [activePlanName, setActivePlanName] = useState<string>(() => {
+    try {
+      return localStorage.getItem('vip_plan_name') || 'شهر (30 يوم)';
+    } catch {
+      return 'شهر (30 يوم)';
+    }
+  });
   const [subscriptionDate, setSubscriptionDate] = useState<string>('07/11/2026');
-  const [expiryDate, setExpiryDate] = useState<string>('08/11/2026');
+  const [expiryDate, setExpiryDate] = useState<string>(() => {
+    try {
+      const saved = localStorage.getItem('vip_expiry_date');
+      if (saved) {
+        const d = new Date(saved);
+        if (!isNaN(d.getTime())) {
+          return `${String(d.getDate()).padStart(2, '0')}/${String(d.getMonth() + 1).padStart(2, '0')}/${d.getFullYear()}`;
+        }
+      }
+    } catch {}
+    return '09/12/2026';
+  });
   const [showAdvancedTools, setShowAdvancedTools] = useState<boolean>(false);
   const [settings, setSettings] = useState<LocateGoSettings>({
     maxDistanceKm: 3.0,
@@ -48,34 +65,66 @@ export default function App() {
   const [isRefreshing, setIsRefreshing] = useState<boolean>(false);
   const [showAssistantModal, setShowAssistantModal] = useState<boolean>(false);
 
-  // VIP Access Lock Screen & Periodic Heartbeat State
-  const [isVipUnlocked, setIsVipUnlocked] = useState<boolean>(false);
-  const [vipCode, setVipCode] = useState<string>('');
+  // VIP Access Lock Screen State: يُدخل المستخدم كود الاشتراك لمرة واحدة فقط ويبقى مفتوحاً طوال مدة الاشتراك
+  const [isVipUnlocked, setIsVipUnlocked] = useState<boolean>(() => {
+    try {
+      const savedCode = localStorage.getItem('vip_active_code');
+      const savedExpiry = localStorage.getItem('vip_expiry_date');
+      if (savedCode && savedExpiry) {
+        const expTime = new Date(savedExpiry).getTime();
+        // إذا كان تاريخ الانتهاء سارياً في المستقبل، يبقى مفتوحاً تلقائياً
+        if (!isNaN(expTime) && expTime > Date.now()) {
+          return true;
+        }
+      }
+      const bridge = (window as any)?.LocateGoNative;
+      if (bridge && typeof bridge.isVipLicensed === 'function' && bridge.isVipLicensed()) {
+        return true;
+      }
+    } catch {}
+    return false;
+  });
+  const [vipCode, setVipCode] = useState<string>(() => {
+    try {
+      return localStorage.getItem('vip_active_code') || '';
+    } catch {
+      return '';
+    }
+  });
   const [terminationNotice, setTerminationNotice] = useState<string | null>(null);
   const [lastHeartbeatAt, setLastHeartbeatAt] = useState<number | null>(null);
   const [remainingHours, setRemainingHours] = useState<number | null>(null);
 
-  // Consume any stored termination notice on initial mount
+  // تنظيف أي إشعار إيقاف سابق إذا كان لدى المستخدم اشتراك ساري ومحفوظ
   useEffect(() => {
-    const notice = consumeTerminationNotice();
-    if (notice?.message) {
-      setTerminationNotice(notice.message);
-    }
+    try {
+      const savedExpiry = localStorage.getItem('vip_expiry_date');
+      if (savedExpiry) {
+        const expTime = new Date(savedExpiry).getTime();
+        if (!isNaN(expTime) && expTime > Date.now()) {
+          localStorage.removeItem('vip_termination_notice');
+          setTerminationNotice(null);
+          return;
+        }
+      }
+      const notice = consumeTerminationNotice();
+      if (notice?.message) {
+        setTerminationNotice(notice.message);
+      }
+    } catch {}
   }, []);
 
-  // 🛡️ شرط صارم في البداية: فحص حالة الترخيص المخزنة (is_vip_licensed)
-  // إذا لم تكن مفعلة وصحيحة، يمنع منعاً باتاً تشغيل أي خدمة خلفية وتظل شاشة القفل وحدها
+  // المزامنة مع جسر تطبيق أندرويد الأصيل للحفاظ على التفعيل
   useEffect(() => {
     const bridge = getNativeBridge();
     if (bridge) {
       try {
         const isLicensed = typeof bridge.isVipLicensed === 'function' ? bridge.isVipLicensed() : false;
-        if (!isLicensed) {
-          if (typeof bridge.killAllServices === 'function') {
-            bridge.killAllServices();
-          } else {
-            bridge.setTrackingActive(false);
-          }
+        const savedCode = localStorage.getItem('vip_active_code');
+        const savedExpiry = localStorage.getItem('vip_expiry_date');
+        const hasValidLicense = isLicensed || (savedCode && savedExpiry && new Date(savedExpiry).getTime() > Date.now());
+        if (hasValidLicense && typeof bridge.setVipLicensed === 'function') {
+          bridge.setVipLicensed(true);
         }
       } catch {}
     }
@@ -188,13 +237,12 @@ export default function App() {
   );
 
   // ----------------------------------------------------
-  // VIP LICENSE: PERIODIC BACKGROUND HEARTBEAT (دالة الفحص الدوري كل دقيقة)
-  // تتحقق دورياً من قاعدة البيانات لصلاحية الكود، وتنفذ الإنهاء الإجباري فور ثبوت انتهائه
+  // VIP LICENSE: PERIODIC BACKGROUND HEARTBEAT (دالة الفحص الهادئ في الخلفية)
+  // تتحقق دورياً من قاعدة البيانات لصلاحية الكود، وتنفذ الإنهاء الإجباري فقط عند انتهاء الصلاحية أو الإلغاء
   // ----------------------------------------------------
   const runLicenseHeartbeat = useCallback(async () => {
     const activeCode = vipCode || localStorage.getItem('vip_active_code');
     if (!activeCode) {
-      await handleEmergencyTermination('missing_code', 'لم يتم العثور على كود ترخيص نشط في الجلسة');
       return;
     }
 
@@ -202,13 +250,25 @@ export default function App() {
       const result = await validateLicenseOnline(activeCode, deviceId);
 
       if (!result.isValid) {
-        // إذا كان خطأ شبكة مؤقت لا نوقف الخدمة فوراً بل ننتظر النبضة التالية
+        // إذا كان خطأ شبكة مؤقت لا نوقف الخدمة
         if (result.reason === 'network_error') {
-          console.warn('[Heartbeat] تعذر مؤقت للاتصال بقاعدة بيانات التراخيص، سيتم الفحص في الدقيقة القادمة.');
           return;
         }
 
-        // ثبوت انتهاء صلاحية الكود أو حذفه أو ربطه بجهاز آخر -> إنهاء إجباري فوري لجميع الخدمات!
+        // إذا كان الاشتراك سارياً ومحفوظاً محلياً، لا نوقف المندوب بسبب اختلاف عارض في بصمة الجهاز
+        // الإنهاء الإجباري يتم فقط عند انتهاء تاريخ الصلاحية صراحة أو تعطيل الكود من المشرف
+        const savedExpiry = localStorage.getItem('vip_expiry_date');
+        if (savedExpiry) {
+          const expMs = new Date(savedExpiry).getTime();
+          if (!isNaN(expMs) && expMs > Date.now()) {
+            if (result.reason !== 'expired' && result.reason !== 'revoked') {
+              console.warn('[Heartbeat] تجاوز التحذير لأن الاشتراك ساري محلياً:', result.reason);
+              return;
+            }
+          }
+        }
+
+        // ثبوت انتهاء صلاحية الكود أو إلغاؤه صراحة -> إنهاء إجباري
         await handleEmergencyTermination(
           result.reason,
           result.message || 'انتهت صلاحية كود الترخيص. تم إيقاف جميع العمليات وحماية الجلسة تلقائياً.'
@@ -225,40 +285,23 @@ export default function App() {
     }
   }, [vipCode, deviceId, handleEmergencyTermination]);
 
-  // تشغيل الفحص الدوري في الخلفية (كل دقيقة = 60,000 مللي ثانية)
+  // تشغيل الفحص الدوري الهادئ في الخلفية (كل دقيقتين دون مقاطعة التبديل بين التطبيقات)
   useEffect(() => {
     if (!isVipUnlocked) return;
 
-    // فحص دوري في الخلفية (يبدأ بعد 45 ثانية من الدخول لتجنب أي تعارض ثم كل دقيقة)
+    // يبدأ بعد دقيقة ونصف من الدخول
     const initialTimer = setTimeout(() => {
       runLicenseHeartbeat();
-    }, 45 * 1000);
+    }, 90 * 1000);
 
-    // فحص دوري كل دقيقة
+    // فحص دوري كل دقيقتين
     const intervalTimer = setInterval(() => {
       runLicenseHeartbeat();
-    }, 60 * 1000);
-
-    const handleFocus = () => {
-      if (document.visibilityState === 'visible') {
-        runLicenseHeartbeat();
-      }
-    };
-
-    const handleOnline = () => {
-      runLicenseHeartbeat();
-    };
-
-    document.addEventListener('visibilitychange', handleFocus);
-    window.addEventListener('focus', handleFocus);
-    window.addEventListener('online', handleOnline);
+    }, 120 * 1000);
 
     return () => {
       clearTimeout(initialTimer);
       clearInterval(intervalTimer);
-      document.removeEventListener('visibilitychange', handleFocus);
-      window.removeEventListener('focus', handleFocus);
-      window.removeEventListener('online', handleOnline);
     };
   }, [isVipUnlocked, runLicenseHeartbeat]);
 
@@ -793,16 +836,27 @@ export default function App() {
         onUnlock={(code, planName, expiry) => {
           setTerminationNotice(null);
           setVipCode(code);
-          if (planName) setActivePlanName(planName);
-          if (expiry) {
-            try {
-              const d = new Date(expiry);
-              const formatted = `${String(d.getDate()).padStart(2, '0')}/${String(d.getMonth() + 1).padStart(2, '0')}/${d.getFullYear()}`;
-              setExpiryDate(formatted);
-            } catch {
-              setExpiryDate(expiry);
-            }
+          const effectivePlan = planName || 'شهر (30 يوم)';
+          setActivePlanName(effectivePlan);
+          const effectiveExpiry = expiry || new Date(Date.now() + 30 * 86400 * 1000).toISOString();
+          try {
+            const d = new Date(effectiveExpiry);
+            const formatted = !isNaN(d.getTime())
+              ? `${String(d.getDate()).padStart(2, '0')}/${String(d.getMonth() + 1).padStart(2, '0')}/${d.getFullYear()}`
+              : effectiveExpiry;
+            setExpiryDate(formatted);
+          } catch {
+            setExpiryDate(effectiveExpiry);
           }
+
+          try {
+            localStorage.setItem('vip_active_code', code);
+            localStorage.setItem('vip_unlocked_session', 'true');
+            localStorage.setItem('vip_plan_name', effectivePlan);
+            localStorage.setItem('vip_expiry_date', effectiveExpiry);
+            localStorage.removeItem('vip_termination_notice');
+          } catch {}
+
           setIsVipUnlocked(true);
           const bridge = getNativeBridge();
           if (bridge && typeof bridge.setVipLicensed === 'function') {

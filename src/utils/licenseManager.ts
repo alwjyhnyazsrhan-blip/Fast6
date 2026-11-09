@@ -166,14 +166,15 @@ export async function validateLicenseOnline(
     }
 
     // 3. التحقق المرن والموثوق من ارتباط الكود بهذا الجهاز
-    if (match.used_by && match.used_by.trim() !== '') {
-      const isMatched = isAuthorizedDevice(match.used_by, currentDevice);
+    const boundDevice = match.target_device_id || match.targetDeviceId || match.used_by || match.usedByDeviceId;
+    if (boundDevice && typeof boundDevice === 'string' && boundDevice.trim() !== '') {
+      const isMatched = isAuthorizedDevice(boundDevice, currentDevice);
       if (!isMatched) {
         return {
           isValid: false,
           reason: 'device_mismatch',
-          message: '⚠️ كود الترخيص مرتبط بجوال أو جهاز آخر',
-          usedBy: match.used_by,
+          message: `⚠️ كود الترخيص مخصص لجهاز آخر (${boundDevice})`,
+          usedBy: boundDevice,
         };
       }
     }

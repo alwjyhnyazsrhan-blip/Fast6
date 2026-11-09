@@ -13,11 +13,11 @@ import {
 } from 'firebase/firestore';
 import firebaseConfig from '../../firebase-applet-config.json';
 
-// Initialize Firebase App
+// Initialize Firebase App with user's appprotector-79e9c credentials
 const app = initializeApp(firebaseConfig);
 
-// CRITICAL: Must pass firebaseConfig.firestoreDatabaseId to getFirestore
-export const db = getFirestore(app, firebaseConfig.firestoreDatabaseId);
+export const FIREBASE_RTDB_URL = 'https://appprotector-79e9c-default-rtdb.firebaseio.com';
+export const db = getFirestore(app);
 export const auth = getAuth(app);
 
 export enum OperationType {
@@ -78,7 +78,7 @@ export function handleFirestoreError(
 export async function testFirestoreConnection(): Promise<boolean> {
   try {
     await getDocFromServer(doc(db, 'test', 'connection'));
-    console.log('[Firebase] Firestore connected successfully to database:', firebaseConfig.firestoreDatabaseId);
+    console.log('[Firebase] Firebase connected successfully to project:', firebaseConfig.projectId);
     return true;
   } catch (error) {
     if (error instanceof Error && error.message.includes('the client is offline')) {

@@ -232,9 +232,25 @@ export class SubscriptionDatabase {
     return (code || '').trim().toUpperCase();
   }
 
+  public isDeviceMatch(devA?: string | null, devB?: string | null): boolean {
+    if (!devA || !devB) return false;
+    const cleanA = devA.toString().trim().replace(/[\u200B-\u200F\uFEFF\u202A-\u202E\s]/g, '').toUpperCase();
+    const cleanB = devB.toString().trim().replace(/[\u200B-\u200F\uFEFF\u202A-\u202E\s]/g, '').toUpperCase();
+    if (!cleanA || !cleanB) return false;
+    if (cleanA === cleanB) return true;
+
+    // Normalization: strip '=' padding from start and end, and normalize letter 'O' with digit '0' for visual equivalence
+    const normA = cleanA.replace(/^=+|=+$/g, '').replace(/O/g, '0').replace(/[^A-Z0-9]/g, '');
+    const normB = cleanB.replace(/^=+|=+$/g, '').replace(/O/g, '0').replace(/[^A-Z0-9]/g, '');
+    if (normA && normB && (normA === normB || normA.includes(normB) || normB.includes(normA))) {
+      return true;
+    }
+    return false;
+  }
+
   public sanitizeDeviceId(deviceId?: string | null): string {
     if (!deviceId || typeof deviceId !== 'string') return '';
-    return deviceId.trim().toUpperCase().replace(/[^A-Z0-9_=-]/g, '').slice(0, 32);
+    return deviceId.trim().toUpperCase().replace(/[\u200B-\u200F\uFEFF\u202A-\u202E\s]/g, '').slice(0, 36);
   }
 
   public getAllCodes(): SubscriptionCode[] {
@@ -472,7 +488,7 @@ export class SubscriptionDatabase {
   /**
    * التحقق والتفعيل البرمجي الشامل من كود الاشتراك مع الربط الآلي بمعرف الجهاز
    */
-  public verifyOrRedeem(rawCode: string, rawDeviceId: string): {
+  public verifyOrRedeem(rawCode: string, rawDeviceId: string, rawVipDeviceId?: string): {
     isValid: boolean;
     reason: 'active' | 'expired' | 'revoked' | 'not_found' | 'device_mismatch';
     message: string;
@@ -503,10 +519,13 @@ export class SubscriptionDatabase {
       };
     }
 
-    // 2. التحقق من تطابق معرف الجهاز (Device ID Binding)
+    // 2. التحقق من تطابق معرف الجهاز (Device ID Binding) بمرونة وموثوقية عالية
+    const devCandidates = [rawDeviceId, rawVipDeviceId, deviceId].filter((id): id is string => Boolean(id && id.trim()));
+
     // أ) إذا كان الكود مخصصاً لجهاز مستهدف محدد
-    if (record.targetDeviceId && record.targetDeviceId !== '') {
-      if (record.targetDeviceId !== deviceId) {
+    if (record.targetDeviceId && record.targetDeviceId.trim() !== '') {
+      const isTargetMatched = devCandidates.some((c) => this.isDeviceMatch(record.targetDeviceId, c));
+      if (!isTargetMatched) {
         return {
           isValid: false,
           reason: 'device_mismatch',
@@ -517,8 +536,9 @@ export class SubscriptionDatabase {
     }
 
     // ب) إذا كان الكود قد استُخدم سابقاً من جهاز آخر
-    if (record.usedByDeviceId && record.usedByDeviceId !== '') {
-      if (record.usedByDeviceId !== deviceId) {
+    if (record.usedByDeviceId && record.usedByDeviceId.trim() !== '') {
+      const isUsedByMatched = devCandidates.some((c) => this.isDeviceMatch(record.usedByDeviceId, c));
+      if (!isUsedByMatched) {
         return {
           isValid: false,
           reason: 'device_mismatch',
@@ -532,7 +552,7 @@ export class SubscriptionDatabase {
     const now = Date.now();
     if (!record.activatedAt) {
       record.activatedAt = new Date().toISOString();
-      record.usedByDeviceId = deviceId;
+      record.usedByDeviceId = record.targetDeviceId || deviceId;
       record.status = 'used';
 
       // إذا كان خيار التفعيل يبدأ عند أول استخدام: نبدأ حساب تاريخ الانتهاء من الآن

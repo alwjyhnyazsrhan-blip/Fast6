@@ -172,10 +172,12 @@ async function startServer() {
       });
     }
 
+    const vipDeviceId = (req.headers["x-vip-device-id"] || req.query.vipDeviceId || req.body?.vipDeviceId || "").toString().trim();
+
     // 1. الأولوية الأولى: الفحص المباشر في قاعدة بيانات الاشتراكات المحلية subscriptionDb
     const localMatch = subscriptionDb.getCode(code);
     if (localMatch) {
-      const result = subscriptionDb.verifyOrRedeem(code, clientDevice);
+      const result = subscriptionDb.verifyOrRedeem(code, clientDevice, vipDeviceId);
       if (!result.isValid) {
         // إيقاف خدمات المندوب على السيرفر في حال عدم الصلاحية
         db.toggleRunning(deviceId, false);
@@ -258,27 +260,33 @@ async function startServer() {
       }
 
       // Check device binding
-      const matchDevice = (match.used_by || "").trim();
-      const vipHeader = (req.headers["x-vip-device-id"] || req.query.vipDeviceId || req.body?.vipDeviceId || "").toString().trim();
+      const matchDevice = (match.used_by || match.usedByDeviceId || "").toString().trim();
+      const targetDevice = (match.target_device_id || match.targetDeviceId || "").toString().trim();
+      const devCandidates = [clientDevice, vipDeviceId, deviceId].filter((id): id is string => Boolean(id && id.trim()));
+
+      if (targetDevice && targetDevice !== "") {
+        const targetMatched = devCandidates.some((c) => subscriptionDb.isDeviceMatch(targetDevice, c));
+        if (!targetMatched) {
+          db.toggleRunning(deviceId, false);
+          return res.json({
+            isValid: false,
+            valid: false,
+            reason: "device_mismatch",
+            message: `⚠️ كود الاشتراك مخصص لجهاز آخر (${targetDevice})`,
+            usedBy: targetDevice,
+          });
+        }
+      }
 
       if (matchDevice && matchDevice !== "") {
-        const matchFound =
-          matchDevice === clientDevice ||
-          matchDevice.toUpperCase() === clientDevice.toUpperCase() ||
-          db.sanitizeDeviceId(matchDevice) === db.sanitizeDeviceId(clientDevice) ||
-          (vipHeader !== "" && (
-            matchDevice === vipHeader ||
-            matchDevice.toUpperCase() === vipHeader.toUpperCase() ||
-            db.sanitizeDeviceId(matchDevice) === db.sanitizeDeviceId(vipHeader)
-          ));
-
+        const matchFound = devCandidates.some((c) => subscriptionDb.isDeviceMatch(matchDevice, c));
         if (!matchFound) {
           db.toggleRunning(deviceId, false);
           return res.json({
             isValid: false,
             valid: false,
             reason: "device_mismatch",
-            message: "⚠️ كود الترخيص مرتبط بجوال أو جهاز آخر",
+            message: `⚠️ كود الترخيص مرتبط بجوال أو جهاز آخر (${matchDevice})`,
             usedBy: match.used_by,
           });
         }
@@ -347,6 +355,21 @@ async function startServer() {
     } catch {
       return res.status(500).json({ error: "Database proxy error" });
     }
+  });
+
+  // روابط تحميل مباشرة وسريعة لملفات لوحة التحكم لرفعها على أي استضافة
+  app.get("/portal-download.zip", (_req: Request, res: Response) => {
+    const zipPath = path.join(process.cwd(), "admin-portal.zip");
+    res.setHeader("Content-Disposition", 'attachment; filename="locatego-admin-portal.zip"');
+    res.setHeader("Content-Type", "application/zip");
+    return res.sendFile(zipPath);
+  });
+
+  app.get("/portal-download.html", (_req: Request, res: Response) => {
+    const htmlPath = path.join(process.cwd(), "admin-portal", "index.html");
+    res.setHeader("Content-Disposition", 'attachment; filename="index.html"');
+    res.setHeader("Content-Type", "text/html; charset=utf-8");
+    return res.sendFile(htmlPath);
   });
 
   // ==========================================
