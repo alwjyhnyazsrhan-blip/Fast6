@@ -50,13 +50,13 @@ const PACKAGES: PackagePlan[] = [
     days: 90,
   },
   {
-    id: 'trial_3_days',
+    id: 'trial_1_day',
     priceSar: '',
-    durationLabelAr: 'تجربة 3 أيام',
-    durationLabelEn: 'Trial (3 Days)',
+    durationLabelAr: 'تجربة يوم',
+    durationLabelEn: 'Trial (1 Day)',
     featuresAr: ['دعم مستمر', 'تحسين في الأداء', 'تحديثات'],
     featuresEn: ['Continuous Support', 'Performance Improvement', 'Regular Updates'],
-    days: 3,
+    days: 1,
   },
 ];
 
@@ -71,7 +71,7 @@ export const VipLockScreen: React.FC<VipLockScreenProps> = ({
 
   const [deviceId, setDeviceId] = useState<string>('');
   const [activationKey, setActivationKey] = useState<string>('');
-  const [selectedPackageId, setSelectedPackageId] = useState<string>('trial_3_days');
+  const [selectedPackageId, setSelectedPackageId] = useState<string>('trial_1_day');
   const [errorMessage, setErrorMessage] = useState<string>(initialError || '');
   const [toastMessage, setToastMessage] = useState<string | null>(null);
   const [isCopied, setIsCopied] = useState<boolean>(false);
@@ -233,10 +233,10 @@ export const VipLockScreen: React.FC<VipLockScreenProps> = ({
         cleanCode.includes('TRIAL');
 
       if (isTrialAttempt) {
-        const expiry = new Date(Date.now() + 3 * 24 * 3600 * 1000).toISOString();
+        const expiry = new Date(Date.now() + 1 * 24 * 3600 * 1000).toISOString();
         localStorage.setItem('vip_active_code', cleanCode);
         localStorage.setItem('vip_device_id', deviceId);
-        localStorage.setItem('vip_plan_name', currentLang === 'ar' ? 'تجريبي 3 أيام' : 'Trial 3 Days');
+        localStorage.setItem('vip_plan_name', currentLang === 'ar' ? 'تجربة يوم' : 'Trial (1 Day)');
         localStorage.setItem('vip_expiry_date', expiry);
         localStorage.removeItem('vip_termination_notice');
 
@@ -245,7 +245,7 @@ export const VipLockScreen: React.FC<VipLockScreenProps> = ({
           bridge.setVipLicensed(true);
         }
 
-        onUnlock(cleanCode, currentLang === 'ar' ? 'تجريبي 3 أيام' : 'Trial 3 Days', expiry);
+        onUnlock(cleanCode, currentLang === 'ar' ? 'تجربة يوم' : 'Trial (1 Day)', expiry);
         setIsLoading(false);
         setIsInitialChecking(false);
         return true;
@@ -378,8 +378,8 @@ export const VipLockScreen: React.FC<VipLockScreenProps> = ({
     e.preventDefault();
     if (!activationKey.trim()) {
       // If user selected trial and pressed activate without key, give them trial
-      if (selectedPackageId === 'trial_3_days') {
-        verifyCodeOnline('TRIAL-3DAYS', false);
+      if (selectedPackageId === 'trial_1_day' || selectedPackageId === 'trial_3_days') {
+        verifyCodeOnline('TRIAL-1DAY', false);
         return;
       }
       setErrorMessage(currentLang === 'ar' ? 'الصق مفتاح التفعيل أولاً' : 'Please paste activation key first');

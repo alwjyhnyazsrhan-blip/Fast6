@@ -2,6 +2,7 @@ import fs from 'fs';
 import path from 'path';
 
 export type SubscriptionDuration =
+  | 'trial_1_day'
   | 'trial_3_days'
   | '1_month'
   | '2_months'
@@ -631,6 +632,8 @@ export class SubscriptionDatabase {
 
   private getDaysForDuration(duration: SubscriptionDuration): number {
     switch (duration) {
+      case 'trial_1_day':
+        return 1;
       case 'trial_3_days':
         return 3;
       case '1_month':
@@ -652,6 +655,8 @@ export class SubscriptionDatabase {
 
   private getPlanNameForDuration(duration: SubscriptionDuration): string {
     switch (duration) {
+      case 'trial_1_day':
+        return 'تجربة يوم';
       case 'trial_3_days':
         return 'تجربة 3 أيام';
       case '1_month':
