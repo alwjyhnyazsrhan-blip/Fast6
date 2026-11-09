@@ -1,0 +1,986 @@
+import React, { useState, useEffect, useCallback } from 'react';
+import { Header } from './components/Header';
+import { MainControlCard } from './components/MainControlCard';
+import { LiveStatusIndicator } from './components/LiveStatusIndicator';
+import { OrdersFeed } from './components/OrdersFeed';
+import { AndroidNativeControls } from './components/AndroidNativeControls';
+import { VipLockScreen } from './components/VipLockScreen';
+import { SecurityShieldBadge } from './components/SecurityShieldBadge';
+import { LocateAssistantModal } from './components/LocateAssistantModal';
+import { LocateHelperDashboard } from './components/LocateHelperDashboard';
+import { AccessibilityPromptBanner } from './components/AccessibilityPromptBanner';
+import { Language } from './utils/i18n';
+import { Radio, ChevronDown, ChevronUp } from 'lucide-react';
+import { LocateGoSettings, LocateGoStatus, OrderItem, AppSource } from './types';
+import { INITIAL_ORDERS, APP_CONFIG, resolveAppSource } from './utils/sampleData';
+import { soundManager } from './utils/audio';
+import { getNativeBridge, isRunningInAndroidApp } from './utils/nativeBridge';
+import { getActiveDeviceId, syncHardwareDeviceId, setActiveDeviceId } from './utils/device';
+import { getSecureApiHeaders } from './utils/security';
+import {
+  validateLicenseOnline,
+  executeEmergencyTermination,
+  consumeTerminationNotice,
+} from './utils/licenseManager';
+
+export default function App() {
+  const [deviceId, setDeviceIdState] = useState<string>(getActiveDeviceId());
+  const [currentLang, setCurrentLang] = useState<Language>('ar');
+  const [isAccessibilityEnabled, setIsAccessibilityEnabled] = useState<boolean>(false);
+  const [activePlanName, setActivePlanName] = useState<string>('تجربة 3 أيام');
+  const [subscriptionDate, setSubscriptionDate] = useState<string>('07/11/2026');
+  const [expiryDate, setExpiryDate] = useState<string>('08/11/2026');
+  const [showAdvancedTools, setShowAdvancedTools] = useState<boolean>(false);
+  const [settings, setSettings] = useState<LocateGoSettings>({
+    maxDistanceKm: 3.0,
+    maxPickupDistanceKm: 1.5,
+    autoAccept: true,
+    soundAlerts: false,
+    vibrationFeedback: false,
+    swipeSpeedMs: 60,
+    tapIntervalMs: 10,
+    enableCustomInterval: false,
+  });
+
+  const [orders, setOrders] = useState<OrderItem[]>([]);
+  const [soundEnabled, setSoundEnabled] = useState<boolean>(false);
+  const [isLocating, setIsLocating] = useState<boolean>(false);
+  const [isRefreshing, setIsRefreshing] = useState<boolean>(false);
+  const [showAssistantModal, setShowAssistantModal] = useState<boolean>(false);
+
+  // VIP Access Lock Screen & Periodic Heartbeat State
+  const [isVipUnlocked, setIsVipUnlocked] = useState<boolean>(false);
+  const [vipCode, setVipCode] = useState<string>('');
+  const [terminationNotice, setTerminationNotice] = useState<string | null>(null);
+  const [lastHeartbeatAt, setLastHeartbeatAt] = useState<number | null>(null);
+  const [remainingHours, setRemainingHours] = useState<number | null>(null);
+
+  // Consume any stored termination notice on initial mount
+  useEffect(() => {
+    const notice = consumeTerminationNotice();
+    if (notice?.message) {
+      setTerminationNotice(notice.message);
+    }
+  }, []);
+
+  // 🛡️ شرط صارم في البداية: فحص حالة الترخيص المخزنة (is_vip_licensed)
+  // إذا لم تكن مفعلة وصحيحة، يمنع منعاً باتاً تشغيل أي خدمة خلفية وتظل شاشة القفل وحدها
+  useEffect(() => {
+    const bridge = getNativeBridge();
+    if (bridge) {
+      try {
+        const isLicensed = typeof bridge.isVipLicensed === 'function' ? bridge.isVipLicensed() : false;
+        if (!isLicensed) {
+          if (typeof bridge.killAllServices === 'function') {
+            bridge.killAllServices();
+          } else {
+            bridge.setTrackingActive(false);
+          }
+        }
+      } catch {}
+    }
+  }, []);
+
+  // Listen for VIP Unlock event from data-bridge.js or native WebView
+  useEffect(() => {
+    const handleVipEvent = (e: any) => {
+      setIsVipUnlocked(true);
+      if (e.detail?.code) setVipCode(e.detail.code);
+      const bridge = getNativeBridge();
+      if (bridge && typeof bridge.setVipLicensed === 'function') {
+        bridge.setVipLicensed(true);
+      }
+    };
+
+    window.addEventListener('vip_unlocked', handleVipEvent);
+    (window as any).onVipUnlocked = (data: any) => {
+      setIsVipUnlocked(true);
+      if (data?.code) setVipCode(data.code);
+      const bridge = getNativeBridge();
+      if (bridge && typeof bridge.setVipLicensed === 'function') {
+        bridge.setVipLicensed(true);
+      }
+    };
+
+    return () => {
+      window.removeEventListener('vip_unlocked', handleVipEvent);
+      delete (window as any).onVipUnlocked;
+    };
+  }, []);
+
+  // Listen for Volume Down button shortcut from Android native shell
+  useEffect(() => {
+    (window as any).onVolumeDownShortcut = () => {
+      setShowAssistantModal((prev) => !prev);
+    };
+    return () => {
+      delete (window as any).onVolumeDownShortcut;
+    };
+  }, []);
+
+  const [status, setStatus] = useState<LocateGoStatus>({
+    deviceId: getActiveDeviceId(),
+    isRunning: false,
+    isOverlayActive: false,
+    isMonitoringScreen: false,
+    fps: 0,
+    latencyMs: 0,
+    lastScanTimestamp: Date.now(),
+    totalScanned: 0,
+    acceptedCount: 0,
+    rejectedCount: 0,
+    serverConnected: false,
+    driverLocation: null,
+  });
+
+  // Listen for device changed events
+  useEffect(() => {
+    const handleDeviceChangeEvent = (e: any) => {
+      if (e.detail?.deviceId) {
+        setDeviceIdState(e.detail.deviceId);
+      }
+    };
+    window.addEventListener('locate_device_changed', handleDeviceChangeEvent);
+    return () => window.removeEventListener('locate_device_changed', handleDeviceChangeEvent);
+  }, []);
+
+  // ----------------------------------------------------
+  // VIP LICENSE: EMERGENCY FORCE TERMINATION (إنهاء إجباري فوري)
+  // يوقف جميع العمليات والخدمات فوراً ويمسح بيانات الجلسة ويعيد التوجيه لشاشة VIP ACCESS
+  // ----------------------------------------------------
+  const handleEmergencyTermination = useCallback(
+    async (reason: string, message: string) => {
+      console.warn(`[App] 🚨 تنفيذ أمر الإنهاء الإجباري للخدمات: ${reason} - ${message}`);
+      setTerminationNotice(message);
+
+      // قتل وإيقاف كافة خدمات أندرويد وإزالة الإشعارات فوراً
+      const bridge = getNativeBridge();
+      if (bridge) {
+        try {
+          if (typeof bridge.setVipLicensed === 'function') {
+            bridge.setVipLicensed(false);
+          }
+          if (typeof bridge.killAllServices === 'function') {
+            bridge.killAllServices();
+          } else if (typeof bridge.stopAllServices === 'function') {
+            bridge.stopAllServices();
+          }
+          bridge.setTrackingActive(false);
+        } catch {}
+      }
+
+      await executeEmergencyTermination({
+        reason,
+        message,
+        deviceId,
+        onTerminate: () => {
+          setStatus((prev) => ({
+            ...prev,
+            isRunning: false,
+            isMonitoringScreen: false,
+          }));
+          setIsVipUnlocked(false);
+          setVipCode('');
+        },
+      });
+    },
+    [deviceId]
+  );
+
+  // ----------------------------------------------------
+  // VIP LICENSE: PERIODIC BACKGROUND HEARTBEAT (دالة الفحص الدوري كل دقيقة)
+  // تتحقق دورياً من قاعدة البيانات لصلاحية الكود، وتنفذ الإنهاء الإجباري فور ثبوت انتهائه
+  // ----------------------------------------------------
+  const runLicenseHeartbeat = useCallback(async () => {
+    const activeCode = vipCode || localStorage.getItem('vip_active_code');
+    if (!activeCode) {
+      await handleEmergencyTermination('missing_code', 'لم يتم العثور على كود ترخيص نشط في الجلسة');
+      return;
+    }
+
+    try {
+      const result = await validateLicenseOnline(activeCode, deviceId);
+
+      if (!result.isValid) {
+        // إذا كان خطأ شبكة مؤقت لا نوقف الخدمة فوراً بل ننتظر النبضة التالية
+        if (result.reason === 'network_error') {
+          console.warn('[Heartbeat] تعذر مؤقت للاتصال بقاعدة بيانات التراخيص، سيتم الفحص في الدقيقة القادمة.');
+          return;
+        }
+
+        // ثبوت انتهاء صلاحية الكود أو حذفه أو ربطه بجهاز آخر -> إنهاء إجباري فوري لجميع الخدمات!
+        await handleEmergencyTermination(
+          result.reason,
+          result.message || 'انتهت صلاحية كود الترخيص. تم إيقاف جميع العمليات وحماية الجلسة تلقائياً.'
+        );
+      } else {
+        // الكود سليم ونشط في قاعدة البيانات
+        setLastHeartbeatAt(Date.now());
+        if (typeof result.remainingHours === 'number') {
+          setRemainingHours(result.remainingHours);
+        }
+      }
+    } catch (err) {
+      console.error('[Heartbeat Error]:', err);
+    }
+  }, [vipCode, deviceId, handleEmergencyTermination]);
+
+  // تشغيل الفحص الدوري في الخلفية (كل دقيقة = 60,000 مللي ثانية)
+  useEffect(() => {
+    if (!isVipUnlocked) return;
+
+    // فحص دوري في الخلفية (يبدأ بعد 45 ثانية من الدخول لتجنب أي تعارض ثم كل دقيقة)
+    const initialTimer = setTimeout(() => {
+      runLicenseHeartbeat();
+    }, 45 * 1000);
+
+    // فحص دوري كل دقيقة
+    const intervalTimer = setInterval(() => {
+      runLicenseHeartbeat();
+    }, 60 * 1000);
+
+    const handleFocus = () => {
+      if (document.visibilityState === 'visible') {
+        runLicenseHeartbeat();
+      }
+    };
+
+    const handleOnline = () => {
+      runLicenseHeartbeat();
+    };
+
+    document.addEventListener('visibilitychange', handleFocus);
+    window.addEventListener('focus', handleFocus);
+    window.addEventListener('online', handleOnline);
+
+    return () => {
+      clearTimeout(initialTimer);
+      clearInterval(intervalTimer);
+      document.removeEventListener('visibilitychange', handleFocus);
+      window.removeEventListener('focus', handleFocus);
+      window.removeEventListener('online', handleOnline);
+    };
+  }, [isVipUnlocked, runLicenseHeartbeat]);
+
+  // ----------------------------------------------------
+  // 0. Single App Architecture: Listen for Android Bridge Sync
+  // ----------------------------------------------------
+  useEffect(() => {
+    // If inside Android App, fetch local settings from SharedPreferences
+    const bridge = getNativeBridge();
+    if (bridge) {
+      try {
+        if (bridge.getDeviceId) {
+          const nativeDevId = bridge.getDeviceId();
+          if (nativeDevId && nativeDevId !== deviceId) {
+            setDeviceIdState(nativeDevId);
+            setActiveDeviceId(nativeDevId);
+          }
+        }
+
+        const rawSettings = bridge.getSettingsJson();
+        if (rawSettings) {
+          const parsed = JSON.parse(rawSettings);
+          setSettings((prev) => ({
+            ...prev,
+            maxDistanceKm: parsed.maxDistanceKm ?? prev.maxDistanceKm,
+            maxPickupDistanceKm: parsed.maxPickupDistanceKm ?? prev.maxPickupDistanceKm ?? 1.5,
+            autoAccept: parsed.autoAccept ?? prev.autoAccept,
+            soundAlerts: parsed.soundAlerts ?? prev.soundAlerts,
+            minPayoutSar: parsed.minPayoutSar ?? prev.minPayoutSar,
+            vibrationFeedback: parsed.vibrationFeedback ?? prev.vibrationFeedback,
+            swipeSpeedMs: parsed.swipeSpeedMs ?? prev.swipeSpeedMs ?? 100,
+            tapIntervalMs: parsed.tapIntervalMs ?? prev.tapIntervalMs ?? 10,
+            enableCustomInterval: parsed.enableCustomInterval ?? prev.enableCustomInterval ?? false,
+          }));
+        }
+
+        const rawStatus = bridge.getAndroidStatusJson();
+        if (rawStatus) {
+          const parsedStatus = JSON.parse(rawStatus);
+          if (typeof parsedStatus.isAccessibilityEnabled === 'boolean') {
+            setIsAccessibilityEnabled(parsedStatus.isAccessibilityEnabled);
+          }
+          if (parsedStatus.currentLatitude && parsedStatus.currentLongitude) {
+            setStatus((prev) => ({
+              ...prev,
+              isRunning: parsedStatus.isTrackingRunning ?? prev.isRunning,
+              driverLocation: {
+                lat: parsedStatus.currentLatitude,
+                lng: parsedStatus.currentLongitude,
+                updatedAt: new Date().toISOString(),
+              },
+            }));
+          }
+        }
+
+        if (typeof bridge.isAccessibilityEnabled === 'function') {
+          setIsAccessibilityEnabled(bridge.isAccessibilityEnabled());
+        }
+      } catch {
+        // Fallback
+      }
+    }
+
+    // Register callback for continuous real-time sync from Kotlin MainActivity
+    window.onLocateGoNativeSync = (nativeState) => {
+      if (nativeState.isVipLicensed === false) {
+        setIsVipUnlocked(false);
+      }
+      if (typeof nativeState.isAccessibilityEnabled === 'boolean') {
+        setIsAccessibilityEnabled(nativeState.isAccessibilityEnabled);
+      }
+      setStatus((prev) => ({
+        ...prev,
+        isRunning: nativeState.isVipLicensed === false ? false : nativeState.isTrackingRunning,
+        driverLocation: nativeState.lat && nativeState.lng ? {
+          lat: nativeState.lat,
+          lng: nativeState.lng,
+          updatedAt: new Date().toISOString(),
+        } : prev.driverLocation,
+      }));
+    };
+
+    return () => {
+      window.onLocateGoNativeSync = undefined;
+    };
+  }, [deviceId]);
+
+  const checkAccessibilityStatus = useCallback(() => {
+    const bridge = getNativeBridge();
+    if (bridge) {
+      try {
+        if (typeof bridge.isAccessibilityEnabled === 'function') {
+          setIsAccessibilityEnabled(bridge.isAccessibilityEnabled());
+          return;
+        }
+        const raw = bridge.getAndroidStatusJson();
+        if (raw) {
+          const parsed = JSON.parse(raw);
+          if (typeof parsed.isAccessibilityEnabled === 'boolean') {
+            setIsAccessibilityEnabled(parsed.isAccessibilityEnabled);
+          }
+        }
+      } catch {}
+    }
+  }, []);
+
+  const handleOpenAccessibilitySettings = useCallback(() => {
+    const bridge = getNativeBridge();
+    if (bridge) {
+      bridge.openAccessibilitySettings();
+    }
+  }, []);
+
+  // ----------------------------------------------------
+  // 1. Initial Sync with Real Server API (Isolated per Device)
+  // ----------------------------------------------------
+  const fetchServerStatus = useCallback(async (targetDeviceId = deviceId) => {
+    try {
+      const res = await fetch(`/api/status?deviceId=${encodeURIComponent(targetDeviceId)}`, {
+        headers: { 'X-Device-Id': targetDeviceId },
+      });
+      if (res.ok) {
+        const data = await res.json();
+        setStatus((prev) => ({
+          ...prev,
+          deviceId: data.deviceId || targetDeviceId,
+          isRunning: data.isRunning,
+          serverConnected: true,
+          driverLocation: data.driverLocation,
+          totalScanned: data.stats?.totalScanned ?? prev.totalScanned,
+          acceptedCount: data.stats?.acceptedCount ?? prev.acceptedCount,
+          rejectedCount: data.stats?.rejectedCount ?? prev.rejectedCount,
+          acceptanceRate: data.stats?.acceptanceRate,
+          totalEarningsSar: data.stats?.totalEarningsSar,
+        }));
+        if (data.settings) {
+          setSettings(data.settings);
+        }
+      }
+    } catch {
+      setStatus((prev) => ({ ...prev, serverConnected: false }));
+    }
+  }, [deviceId]);
+
+  const fetchServerOrders = useCallback(async (targetDeviceId = deviceId) => {
+    try {
+      const res = await fetch(`/api/orders?deviceId=${encodeURIComponent(targetDeviceId)}`, {
+        headers: { 'X-Device-Id': targetDeviceId },
+      });
+      if (res.ok) {
+        const data = await res.json();
+        if (Array.isArray(data.orders)) {
+          const mappedOrders: OrderItem[] = data.orders.map((o: any) => ({
+            id: o.id,
+            deviceId: o.deviceId || targetDeviceId,
+            appSource: resolveAppSource(o.appName),
+            appName: o.appName || 'Locate Go',
+            storeName: o.storeName || 'متجر',
+            customerDistrict: o.customerDistrict || 'الرياض',
+            distanceKm: o.distanceKm || 2.0,
+            pickupDistanceKm: o.pickupDistanceKm,
+            deliveryDistanceKm: o.deliveryDistanceKm,
+            payoutSar: o.payoutSar || 18,
+            detectedAt: new Date(o.detectedAt || Date.now()),
+            status: o.status,
+            rejectionReason: o.rejectionReason,
+            autoAccepted: o.autoAccepted,
+          }));
+          setOrders(mappedOrders);
+        }
+      }
+    } catch {
+      // Offline fallback
+    }
+  }, [deviceId]);
+
+  useEffect(() => {
+    fetchServerStatus(deviceId);
+    fetchServerOrders(deviceId);
+  }, [fetchServerStatus, fetchServerOrders, deviceId]);
+
+  // Silent Hardware Device ID Sync (Android ID / Native Hardware ID)
+  useEffect(() => {
+    const detectHardwareDeviceId = () => {
+      const bridge = getNativeBridge();
+      if (bridge && typeof bridge.getDeviceId === 'function') {
+        try {
+          const hardwareId = bridge.getDeviceId();
+          if (hardwareId && hardwareId.trim()) {
+            const cleanId = hardwareId.trim().toUpperCase();
+            if (cleanId !== deviceId) {
+              setDeviceIdState(cleanId);
+              setStatus((prev) => ({ ...prev, deviceId: cleanId }));
+              syncHardwareDeviceId(cleanId);
+              fetchServerStatus(cleanId);
+              fetchServerOrders(cleanId);
+            }
+          }
+        } catch {}
+      }
+    };
+
+    detectHardwareDeviceId();
+    const timer = setTimeout(detectHardwareDeviceId, 600);
+    return () => clearTimeout(timer);
+  }, [deviceId, fetchServerStatus, fetchServerOrders]);
+
+  // ----------------------------------------------------
+  // 2. Real GPS Location via HTML5 Geolocation API
+  // ----------------------------------------------------
+  const handleGetLiveGPSLocation = useCallback(() => {
+    if (!('geolocation' in navigator)) {
+      alert('المتصفح لا يدعم تحديد الموقع الجغرافي');
+      return;
+    }
+
+    setIsLocating(true);
+    navigator.geolocation.getCurrentPosition(
+      async (pos) => {
+        setIsLocating(false);
+        const { latitude, longitude, accuracy } = pos.coords;
+        const driverLoc = {
+          lat: latitude,
+          lng: longitude,
+          accuracy,
+          updatedAt: new Date().toISOString(),
+        };
+
+        setStatus((prev) => ({ ...prev, driverLocation: driverLoc }));
+
+        // Post to real server with cryptographically signed integrity headers
+        try {
+          const bodyStr = JSON.stringify({ lat: latitude, lng: longitude, accuracy, deviceId });
+          const secureHeaders = await getSecureApiHeaders(deviceId, bodyStr);
+          await fetch('/api/location', {
+            method: 'POST',
+            headers: secureHeaders,
+            body: bodyStr,
+          });
+        } catch {
+          // Ignored if offline
+        }
+      },
+      () => {
+        setIsLocating(false);
+      },
+      { enableHighAccuracy: true, timeout: 10000, maximumAge: 0 }
+    );
+  }, [deviceId]);
+
+  // Sync counts whenever orders change
+  useEffect(() => {
+    setStatus((prev) => ({
+      ...prev,
+      totalScanned: orders.length,
+      acceptedCount: orders.filter((o) => o.status === 'accepted').length,
+      rejectedCount: orders.filter((o) => o.status === 'rejected').length,
+    }));
+  }, [orders]);
+
+  // ----------------------------------------------------
+  // 3. Master Power Toggle (Synced with Server & Android Native)
+  // ----------------------------------------------------
+  const handleTogglePower = useCallback(async () => {
+    const nextRunning = !status.isRunning;
+    
+    // Play sound feedback
+    if (soundEnabled) {
+      if (nextRunning) {
+        soundManager.playStart();
+      } else {
+        soundManager.playStop();
+      }
+    }
+
+    setStatus((prev) => ({
+      ...prev,
+      isRunning: nextRunning,
+      isMonitoringScreen: nextRunning,
+    }));
+
+    // If running in Android App, notify native layer
+    const bridge = getNativeBridge();
+    if (bridge) {
+      bridge.setTrackingActive(nextRunning);
+    }
+
+    try {
+      await fetch('/api/status/toggle', {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          'X-Device-Id': deviceId,
+        },
+        body: JSON.stringify({ isRunning: nextRunning, deviceId }),
+      });
+    } catch {
+      // Local state already updated
+    }
+  }, [status.isRunning, soundEnabled, deviceId]);
+
+  // Keyboard shortcut: Spacebar toggles start/stop
+  useEffect(() => {
+    const handleKeyDown = (e: KeyboardEvent) => {
+      if (['INPUT', 'TEXTAREA', 'SELECT'].includes((e.target as HTMLElement)?.tagName)) {
+        return;
+      }
+      if (e.code === 'Space') {
+        e.preventDefault();
+        handleTogglePower();
+      }
+    };
+    window.addEventListener('keydown', handleKeyDown);
+    return () => window.removeEventListener('keydown', handleKeyDown);
+  }, [handleTogglePower]);
+
+  // ----------------------------------------------------
+  // 4. Update Settings (Synced with Server & Android SharedPreferences)
+  // ----------------------------------------------------
+  const handleUpdateMaxDistance = async (km: number) => {
+    setSettings((prev) => {
+      const updated = { ...prev, maxDistanceKm: km };
+      const bridge = getNativeBridge();
+      if (bridge) {
+        bridge.saveSettings(JSON.stringify(updated));
+      }
+      return updated;
+    });
+
+    try {
+      await fetch('/api/settings', {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          'X-Device-Id': deviceId,
+        },
+        body: JSON.stringify({ maxDistanceKm: km, deviceId }),
+      });
+    } catch {
+      // Keep local
+    }
+  };
+
+  const handleUpdateMaxPickupDistance = async (km: number) => {
+    setSettings((prev) => {
+      const updated = { ...prev, maxPickupDistanceKm: km };
+      const bridge = getNativeBridge();
+      if (bridge) {
+        bridge.saveSettings(JSON.stringify(updated));
+      }
+      return updated;
+    });
+
+    try {
+      await fetch('/api/settings', {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          'X-Device-Id': deviceId,
+        },
+        body: JSON.stringify({ maxPickupDistanceKm: km, deviceId }),
+      });
+    } catch {
+      // Keep local
+    }
+  };
+
+  const handleUpdateSettings = async (newSettings: Partial<LocateGoSettings>) => {
+    setSettings((prev) => {
+      const updated = { ...prev, ...newSettings };
+      const bridge = getNativeBridge();
+      if (bridge) {
+        bridge.saveSettings(JSON.stringify(updated));
+      }
+      return updated;
+    });
+
+    try {
+      await fetch('/api/settings', {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          'X-Device-Id': deviceId,
+        },
+        body: JSON.stringify({ ...newSettings, deviceId }),
+      });
+    } catch {
+      // Keep local
+    }
+  };
+
+  // ----------------------------------------------------
+  // 5. Submit Order to Real Server for Geodesic Evaluation
+  // ----------------------------------------------------
+  const handleProcessOrder = useCallback(
+    async (orderPayload: {
+      appName: string;
+      storeName: string;
+      customerDistrict?: string;
+      distanceKm?: number;
+      pickupDistanceKm?: number;
+      deliveryDistanceKm?: number;
+      payoutSar: number;
+      storeLat?: number;
+      storeLng?: number;
+      customerLat?: number;
+      customerLng?: number;
+    }) => {
+      try {
+        const bodyStr = JSON.stringify({ ...orderPayload, deviceId });
+        const secureHeaders = await getSecureApiHeaders(deviceId, bodyStr);
+        const res = await fetch('/api/orders/evaluate', {
+          method: 'POST',
+          headers: secureHeaders,
+          body: bodyStr,
+        });
+
+        if (res.ok) {
+          const data = await res.json();
+          const serverOrder = data.order;
+          if (serverOrder) {
+            const mappedOrder: OrderItem = {
+              id: serverOrder.id,
+              deviceId: serverOrder.deviceId || deviceId,
+              appSource: resolveAppSource(serverOrder.appName || orderPayload.appName),
+              appName: serverOrder.appName,
+              storeName: serverOrder.storeName,
+              customerDistrict: serverOrder.customerDistrict,
+              distanceKm: serverOrder.distanceKm,
+              pickupDistanceKm: serverOrder.pickupDistanceKm,
+              deliveryDistanceKm: serverOrder.deliveryDistanceKm,
+              payoutSar: serverOrder.payoutSar,
+              detectedAt: new Date(serverOrder.detectedAt),
+              status: serverOrder.status,
+              rejectionReason: serverOrder.rejectionReason,
+              autoAccepted: serverOrder.autoAccepted,
+            };
+
+            setOrders((prev) => [mappedOrder, ...prev]);
+
+            if (soundEnabled) {
+              if (mappedOrder.status === 'accepted') {
+                soundManager.playAccepted();
+              } else {
+                soundManager.playRejected();
+              }
+            }
+            return;
+          }
+        }
+      } catch {
+        // Fallback local processing if server is temporarily unreachable
+      }
+
+      // Fallback local Haversine computation
+      const distance = orderPayload.deliveryDistanceKm ?? orderPayload.distanceKm ?? 1.8;
+      const pickupDist = orderPayload.pickupDistanceKm ?? 1.2;
+      const payout = orderPayload.payoutSar || 18;
+
+      let isAccepted = true;
+      let rejectionReason: string | undefined = undefined;
+
+      // تم استبعاد السعر تماماً من معايير القبول أو الرفض - الاعتماد حصرياً على المسافات الجغرافية
+      if (!status.isRunning) {
+        isAccepted = false;
+        rejectionReason = `أداة المندوب (${deviceId}) في وضع الإيقاف (Offline) - يرجى الضغط على زر تشغيل الأداة (Start) لبدء قبول الطلبات`;
+      } else if (distance > settings.maxDistanceKm) {
+        isAccepted = false;
+        rejectionReason = `مسافة العميل (${distance} كم) تتجاوز الحد الأقصى المحدد (${settings.maxDistanceKm} كم)`;
+      } else if (settings.maxPickupDistanceKm && pickupDist > settings.maxPickupDistanceKm) {
+        isAccepted = false;
+        rejectionReason = `مسافة المطعم (${pickupDist} كم) تتجاوز الحد الأقصى المحدد (${settings.maxPickupDistanceKm} كم)`;
+      }
+
+      const fallbackOrder: OrderItem = {
+        id: `ord-${Math.floor(1000 + Math.random() * 9000)}`,
+        deviceId: deviceId,
+        appSource: resolveAppSource(orderPayload.appName),
+        appName: orderPayload.appName,
+        storeName: orderPayload.storeName,
+        customerDistrict: orderPayload.customerDistrict || 'حي الياسمين',
+        distanceKm: distance,
+        pickupDistanceKm: pickupDist,
+        deliveryDistanceKm: distance,
+        payoutSar: payout,
+        detectedAt: new Date(),
+        status: isAccepted ? 'accepted' : 'rejected',
+        rejectionReason,
+        autoAccepted: isAccepted && settings.autoAccept,
+      };
+
+      setOrders((prev) => [fallbackOrder, ...prev]);
+      if (soundEnabled) {
+        if (isAccepted) {
+          soundManager.playAccepted();
+        } else {
+          soundManager.playRejected();
+        }
+      }
+    },
+    [status.isRunning, settings.maxDistanceKm, settings.maxPickupDistanceKm, settings.minPayoutSar, settings.autoAccept, soundEnabled, deviceId]
+  );
+
+  // Clear orders from server for this device
+  const handleClearOrders = async () => {
+    setOrders([]);
+    try {
+      await fetch(`/api/orders?deviceId=${encodeURIComponent(deviceId)}`, {
+        method: 'DELETE',
+        headers: { 'X-Device-Id': deviceId },
+      });
+    } catch {
+      // Local cleared
+    }
+  };
+
+  // Real server synchronization
+  const handleRefreshServerOrders = useCallback(async () => {
+    setIsRefreshing(true);
+    await fetchServerStatus(deviceId);
+    await fetchServerOrders(deviceId);
+    setIsRefreshing(false);
+  }, [fetchServerStatus, fetchServerOrders, deviceId]);
+
+  // If not unlocked, lock the entire interface with VIP ACCESS Screen
+  if (!isVipUnlocked) {
+    return (
+      <VipLockScreen
+        initialError={terminationNotice}
+        lang={currentLang}
+        onLanguageChange={setCurrentLang}
+        onUnlock={(code, planName, expiry) => {
+          setTerminationNotice(null);
+          setVipCode(code);
+          if (planName) setActivePlanName(planName);
+          if (expiry) {
+            try {
+              const d = new Date(expiry);
+              const formatted = `${String(d.getDate()).padStart(2, '0')}/${String(d.getMonth() + 1).padStart(2, '0')}/${d.getFullYear()}`;
+              setExpiryDate(formatted);
+            } catch {
+              setExpiryDate(expiry);
+            }
+          }
+          setIsVipUnlocked(true);
+          const bridge = getNativeBridge();
+          if (bridge && typeof bridge.setVipLicensed === 'function') {
+            bridge.setVipLicensed(true);
+          }
+        }}
+      />
+    );
+  }
+
+  return (
+    <div className="min-h-screen bg-[#090d16] text-slate-100 flex flex-col selection:bg-emerald-500 selection:text-black">
+      {/* Top Navigation & Status Header */}
+      <Header
+        status={status}
+        soundEnabled={soundEnabled}
+        onToggleSound={() => setSoundEnabled(!soundEnabled)}
+        onRefreshServer={handleRefreshServerOrders}
+        isRefreshing={isRefreshing}
+        vipCode={vipCode}
+        currentDeviceId={deviceId}
+        lastHeartbeatAt={lastHeartbeatAt}
+        remainingHours={remainingHours}
+        onRelock={() => {
+          handleEmergencyTermination('user_relock', currentLang === 'ar' ? 'تم قفل التطبيق يدوياً والعودة لشاشة الدخول' : 'Application locked manually');
+        }}
+      />
+
+      {/* Main Content Area */}
+      <main className="flex-1 max-w-4xl w-full mx-auto px-4 py-6 sm:px-6 space-y-6">
+
+        {/* 0. إشعار تفعيل إمكانية الوصول (Accessibility Activation Notification Banner & Modal) */}
+        <AccessibilityPromptBanner
+          isAccessibilityEnabled={isAccessibilityEnabled}
+          onRefreshStatus={checkAccessibilityStatus}
+          lang={currentLang}
+        />
+
+        {/* 1. Main Screen matching Video 2: LocateHelperDashboard */}
+        <LocateHelperDashboard
+          status={status}
+          lang={currentLang}
+          onLanguageChange={setCurrentLang}
+          onTogglePower={handleTogglePower}
+          onOpenAssistantModal={() => setShowAssistantModal(true)}
+          onLogout={() => {
+            handleEmergencyTermination('user_logout', currentLang === 'ar' ? 'تم تسجيل الخروج بنجاح' : 'Logged out successfully');
+          }}
+          subscriptionDate={subscriptionDate}
+          expiryDate={expiryDate}
+          remainingHours={remainingHours}
+          vipCode={vipCode}
+          planName={activePlanName}
+          isAccessibilityEnabled={isAccessibilityEnabled}
+          onOpenAccessibility={handleOpenAccessibilitySettings}
+        />
+
+        {/* Collapsible toggle for Advanced Tools & Live Orders Radar */}
+        <div className="max-w-md mx-auto pt-2">
+          <button
+            onClick={() => setShowAdvancedTools(!showAdvancedTools)}
+            className="w-full py-2.5 px-4 rounded-2xl bg-slate-900/70 hover:bg-slate-800/80 border border-slate-800 text-slate-400 hover:text-slate-200 text-xs font-bold flex items-center justify-between transition-all cursor-pointer shadow-sm"
+          >
+            <div className="flex items-center gap-2">
+              <Radio className="w-3.5 h-3.5 text-cyan-400" />
+              <span>{currentLang === 'ar' ? 'الأدوات المتقدمة ورادار الطلبات المباشرة' : 'Advanced Tools & Live Order Radar'}</span>
+            </div>
+            {showAdvancedTools ? <ChevronUp className="w-4 h-4" /> : <ChevronDown className="w-4 h-4" />}
+          </button>
+        </div>
+
+        {/* Detailed Live Radar & Diagnostic Tools (Visible when toggled) */}
+        {showAdvancedTools && (
+          <div className="space-y-6 animate-fadeIn pt-2">
+            {/* 1. Security & Anti-Reverse Engineering Protection Shield (ProGuard / R8 & API HMAC) */}
+            <SecurityShieldBadge currentDeviceId={deviceId} />
+
+            {/* 2. Android Native Integration Controls (Single App Mode) */}
+            <AndroidNativeControls
+              settings={settings}
+              status={status}
+              onTogglePower={handleTogglePower}
+              onUpdateSettings={handleUpdateSettings}
+            />
+
+            {/* 3. Main Controls: Master Start/Stop & Dual Distance Thresholds */}
+            <MainControlCard
+              settings={settings}
+              status={status}
+              onTogglePower={handleTogglePower}
+              onUpdateMaxDistance={handleUpdateMaxDistance}
+              onUpdateMaxPickupDistance={handleUpdateMaxPickupDistance}
+              onUpdateSettings={handleUpdateSettings}
+              onGetLiveLocation={handleGetLiveGPSLocation}
+              isLocating={isLocating}
+              onOpenAssistantModal={() => setShowAssistantModal(true)}
+            />
+
+            {/* 4. Live Status & Diagnostics Indicator */}
+            <LiveStatusIndicator
+              status={status}
+              maxDistanceKm={settings.maxDistanceKm}
+              maxPickupDistanceKm={settings.maxPickupDistanceKm ?? 1.5}
+            />
+
+            {/* 5. Detected Orders Feed & History */}
+            <OrdersFeed
+              orders={orders}
+              maxDistanceKm={settings.maxDistanceKm}
+              maxPickupDistanceKm={settings.maxPickupDistanceKm ?? 1.5}
+              isRunning={status.isRunning}
+              onClearOrders={handleClearOrders}
+              onTestCustomOrder={handleProcessOrder}
+              currentDeviceId={deviceId}
+            />
+          </div>
+        )}
+
+      </main>
+
+      {/* Floating HUD Access Button (مساعد لوكيت L.H) */}
+      <div className="fixed bottom-6 left-6 z-40">
+        <button
+          onClick={() => setShowAssistantModal(true)}
+          className="group flex items-center gap-2.5 px-4 py-2.5 rounded-full bg-gradient-to-r from-emerald-600 via-teal-600 to-indigo-700 hover:from-emerald-500 hover:to-indigo-600 text-white font-bold text-xs shadow-2xl shadow-emerald-950/70 border border-emerald-400/40 hover:scale-105 active:scale-95 transition-all cursor-pointer"
+          title="فتح واجهة مساعد لوكيت L.H"
+        >
+          <span className="w-6 h-6 rounded-full bg-emerald-400 text-slate-950 font-black text-xs flex items-center justify-center shadow-inner">
+            L.H
+          </span>
+          <span className="tracking-wide">مساعد لوكيت</span>
+          <span className="w-2 h-2 rounded-full bg-emerald-300 animate-ping" />
+        </button>
+      </div>
+
+      {/* Modal Overlay: مساعد لوكيت L.H (متطابق 100% مع شاشة الجوال) */}
+      {showAssistantModal && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center p-2 sm:p-4 bg-black/85 backdrop-blur-md animate-fadeIn overflow-y-auto overscroll-contain">
+          <div className="w-full max-w-md relative my-auto animate-scaleIn">
+            <LocateAssistantModal
+              settings={settings}
+              status={status}
+              onClose={() => setShowAssistantModal(false)}
+              onTogglePower={handleTogglePower}
+              onUpdateSettings={handleUpdateSettings}
+              isFloating={true}
+              lang={currentLang}
+              onLanguageChange={setCurrentLang}
+              onLogout={() => {
+                setShowAssistantModal(false);
+                handleEmergencyTermination('user_logout', currentLang === 'ar' ? 'تم تسجيل الخروج بنجاح' : 'Logged out successfully');
+              }}
+            />
+          </div>
+        </div>
+      )}
+
+      {/* Persistent Night-Mode Driver Footer */}
+      <footer className="mt-auto border-t border-slate-800/80 bg-[#080c14] py-4 px-6 text-center text-xs text-slate-400">
+        <div className="max-w-7xl mx-auto flex flex-col sm:flex-row items-center justify-between gap-2">
+          <div className="flex items-center gap-2">
+            <span className="w-2 h-2 rounded-full bg-emerald-500 animate-pulse" />
+            <span className="text-slate-300 font-semibold">Locate Go - لوحة تحكم المناديب والتحقق الجغرافي</span>
+            <span className="text-slate-400">| نظام الفلترة المباشر</span>
+          </div>
+          <div className="flex items-center gap-3 text-slate-400 font-mono">
+            <span>حد العميل: {settings.maxDistanceKm} كم</span>
+            <span>•</span>
+            <span>حد المطعم: {settings.maxPickupDistanceKm ?? 1.5} كم</span>
+            <span>•</span>
+            <span>الطلبات: {orders.length}</span>
+            <span>•</span>
+            <span className={status.isRunning ? 'text-emerald-400' : 'text-slate-400'}>
+              {status.isRunning ? 'المراقبة تعمل' : 'متوقف'}
+            </span>
+          </div>
+        </div>
+      </footer>
+    </div>
+  );
+}
