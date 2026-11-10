@@ -1,4 +1,4 @@
-import React, { useState } from 'react';
+import React, { useState, useEffect } from 'react';
 import { Play, Square, Key, Calendar, Clock, ChevronDown, ChevronUp, Radio } from 'lucide-react';
 import { LocateGoStatus } from '../types';
 import { Language, translations } from '../utils/i18n';
@@ -12,11 +12,33 @@ interface LocateHelperDashboardProps {
   onLogout: () => void;
   subscriptionDate?: string;
   expiryDate?: string;
+  expiryIso?: string;
   remainingHours?: number | null;
   vipCode?: string;
   planName?: string;
   isAccessibilityEnabled?: boolean;
   onOpenAccessibility?: () => void;
+}
+
+function getExpiryTimestamp(expiryIso?: string, expiryDate?: string, remainingHours?: number | null): number {
+  if (expiryIso) {
+    const t = new Date(expiryIso).getTime();
+    if (!isNaN(t) && t > 0) return t;
+  }
+  if (expiryDate && expiryDate.includes('/')) {
+    const parts = expiryDate.split('/');
+    if (parts.length === 3) {
+      const day = parseInt(parts[0], 10);
+      const month = parseInt(parts[1], 10) - 1;
+      const year = parseInt(parts[2], 10);
+      const d = new Date(year, month, day, 23, 59, 59);
+      if (!isNaN(d.getTime())) return d.getTime();
+    }
+  }
+  if (typeof remainingHours === 'number' && remainingHours > 0) {
+    return Date.now() + remainingHours * 3600 * 1000;
+  }
+  return Date.now() + 24 * 3600 * 1000;
 }
 
 export const LocateHelperDashboard: React.FC<LocateHelperDashboardProps> = ({
@@ -26,9 +48,10 @@ export const LocateHelperDashboard: React.FC<LocateHelperDashboardProps> = ({
   onTogglePower,
   onOpenAssistantModal,
   onLogout,
-  subscriptionDate = '07/11/2026',
-  expiryDate = '08/11/2026',
-  remainingHours = 24,
+  subscriptionDate,
+  expiryDate,
+  expiryIso,
+  remainingHours,
   vipCode,
   planName,
   isAccessibilityEnabled = true,
@@ -36,6 +59,41 @@ export const LocateHelperDashboard: React.FC<LocateHelperDashboardProps> = ({
 }) => {
   const t = translations[lang];
   const [showToast, setShowToast] = useState<{ message: string; isWarning?: boolean } | null>(null);
+
+  // عداد تنازلي حي ينقص كل ثانية في الوقت الفعلي أمام المستخدم
+  const [currentTick, setCurrentTick] = useState<number>(() => Date.now());
+
+  useEffect(() => {
+    const timer = setInterval(() => {
+      setCurrentTick(Date.now());
+    }, 1000);
+    return () => clearInterval(timer);
+  }, []);
+
+  const expiryTimestamp = getExpiryTimestamp(expiryIso, expiryDate, remainingHours);
+  const diffMs = Math.max(0, expiryTimestamp - currentTick);
+  const isExpired = diffMs <= 0;
+
+  const totalSec = Math.floor(diffMs / 1000);
+  const days = Math.floor(totalSec / 86400);
+  const hours = Math.floor((totalSec % 86400) / 3600);
+  const minutes = Math.floor((totalSec % 3600) / 60);
+  const seconds = totalSec % 60;
+
+  let timeRemainingStr = '';
+  if (isExpired) {
+    timeRemainingStr = lang === 'ar' ? 'انتهت الصلاحية' : 'Expired';
+  } else if (days > 0) {
+    timeRemainingStr =
+      lang === 'ar'
+        ? `${days} يوم و ${hours} ساعة و ${minutes} دقيقة و ${seconds} ثانية`
+        : `${days}d ${hours}h ${minutes}m ${seconds}s`;
+  } else {
+    timeRemainingStr =
+      lang === 'ar'
+        ? `${hours} ساعة و ${minutes} دقيقة و ${seconds} ثانية`
+        : `${hours}h ${minutes}m ${seconds}s`;
+  }
 
   const handleStartHelper = () => {
     if (!status.isRunning) {
@@ -56,13 +114,11 @@ export const LocateHelperDashboard: React.FC<LocateHelperDashboardProps> = ({
       return;
     }
 
-    // Trigger the exact toast notification from the video
     setShowToast({ message: t.orderStartSent });
     setTimeout(() => {
       setShowToast(null);
     }, 2800);
 
-    // Automatically open the HUD modal as seen in the video
     setTimeout(() => {
       onOpenAssistantModal();
     }, 400);
@@ -73,14 +129,6 @@ export const LocateHelperDashboard: React.FC<LocateHelperDashboardProps> = ({
       onTogglePower();
     }
   };
-
-  // Format time remaining display
-  const hours = remainingHours !== null && remainingHours !== undefined ? Math.floor(remainingHours) : 23;
-  const minutes = 57;
-  const timeRemainingStr =
-    lang === 'ar'
-      ? `${hours} ساعة ${minutes} دقيقة`
-      : `${hours} hour(s) ${minutes} min`;
 
   return (
     <div className="w-full max-w-md mx-auto relative select-none animate-fadeIn" dir={lang === 'ar' ? 'rtl' : 'ltr'}>

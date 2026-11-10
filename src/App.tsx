@@ -29,24 +29,83 @@ export default function App() {
   const [isAccessibilityEnabled, setIsAccessibilityEnabled] = useState<boolean>(false);
   const [activePlanName, setActivePlanName] = useState<string>(() => {
     try {
-      return localStorage.getItem('vip_plan_name') || 'شهر (30 يوم)';
+      return localStorage.getItem('vip_plan_name') || 'تجربة يوم';
     } catch {
-      return 'شهر (30 يوم)';
+      return 'تجربة يوم';
     }
   });
-  const [subscriptionDate, setSubscriptionDate] = useState<string>('07/11/2026');
-  const [expiryDate, setExpiryDate] = useState<string>(() => {
+
+  // حساب وتصحيح تواريخ الاشتراك وتاريخ الانتهاء لتتوافق تماماً مع مدة الباقة (تجربة يوم = 24 ساعة بالضبط)
+  const initialDates = (() => {
     try {
-      const saved = localStorage.getItem('vip_expiry_date');
-      if (saved) {
-        const d = new Date(saved);
-        if (!isNaN(d.getTime())) {
-          return `${String(d.getDate()).padStart(2, '0')}/${String(d.getMonth() + 1).padStart(2, '0')}/${d.getFullYear()}`;
+      const savedPlan = localStorage.getItem('vip_plan_name') || 'تجربة يوم';
+      const is1DayTrial = savedPlan.includes('يوم') && !savedPlan.includes('3') && !savedPlan.includes('شهر');
+      const savedExpiry = localStorage.getItem('vip_expiry_date');
+      const savedActivatedAt = localStorage.getItem('vip_activated_at');
+      const now = new Date();
+
+      if (savedExpiry) {
+        let expD = new Date(savedExpiry);
+        if (!isNaN(expD.getTime())) {
+          let actD: Date | null = null;
+          if (savedActivatedAt) {
+            const parsed = new Date(savedActivatedAt);
+            if (!isNaN(parsed.getTime())) actD = parsed;
+          }
+
+          // إذا كانت الباقة تجربة يوم: يجب أن يكون الفرق يوماً واحداً بالضبط (24 ساعة)
+          if (is1DayTrial) {
+            if (!actD) {
+              // إذا لم يُحفظ تاريخ التفعيل وكان الفرق كبيراً عن 24 ساعة، نحسب التفعيل كـ 24 ساعة قبل الانتهاء
+              actD = new Date(expD.getTime() - 24 * 3600 * 1000);
+              localStorage.setItem('vip_activated_at', actD.toISOString());
+            } else if (expD.getTime() - actD.getTime() > 26 * 3600 * 1000) {
+              // تصحيح أي تباعد قديم ناتج عن باقة الـ 3 أيام السابقة ليكون 24 ساعة فقط
+              expD = new Date(actD.getTime() + 24 * 3600 * 1000);
+              localStorage.setItem('vip_expiry_date', expD.toISOString());
+            }
+          }
+
+          if (!actD) {
+            actD = new Date(expD.getTime() - 30 * 24 * 3600 * 1000);
+          }
+
+          const subFormatted = `${String(actD.getDate()).padStart(2, '0')}/${String(actD.getMonth() + 1).padStart(2, '0')}/${actD.getFullYear()}`;
+          const expFormatted = `${String(expD.getDate()).padStart(2, '0')}/${String(expD.getMonth() + 1).padStart(2, '0')}/${expD.getFullYear()}`;
+          return {
+            subDate: subFormatted,
+            expDate: expFormatted,
+            expIso: expD.toISOString(),
+          };
         }
       }
-    } catch {}
-    return '09/12/2026';
-  });
+
+      // افتراضي: تجربة يوم تبدأ من الآن وتنتهي بعد 24 ساعة بالضبط
+      const actD = now;
+      const expD = new Date(actD.getTime() + 24 * 3600 * 1000);
+      const subFormatted = `${String(actD.getDate()).padStart(2, '0')}/${String(actD.getMonth() + 1).padStart(2, '0')}/${actD.getFullYear()}`;
+      const expFormatted = `${String(expD.getDate()).padStart(2, '0')}/${String(expD.getMonth() + 1).padStart(2, '0')}/${expD.getFullYear()}`;
+      localStorage.setItem('vip_activated_at', actD.toISOString());
+      localStorage.setItem('vip_expiry_date', expD.toISOString());
+      return {
+        subDate: subFormatted,
+        expDate: expFormatted,
+        expIso: expD.toISOString(),
+      };
+    } catch {
+      const now = new Date();
+      const expD = new Date(now.getTime() + 24 * 3600 * 1000);
+      return {
+        subDate: `${String(now.getDate()).padStart(2, '0')}/${String(now.getMonth() + 1).padStart(2, '0')}/${now.getFullYear()}`,
+        expDate: `${String(expD.getDate()).padStart(2, '0')}/${String(expD.getMonth() + 1).padStart(2, '0')}/${expD.getFullYear()}`,
+        expIso: expD.toISOString(),
+      };
+    }
+  })();
+
+  const [subscriptionDate, setSubscriptionDate] = useState<string>(initialDates.subDate);
+  const [expiryDate, setExpiryDate] = useState<string>(initialDates.expDate);
+  const [expiryIso, setExpiryIso] = useState<string>(initialDates.expIso);
   const [showAdvancedTools, setShowAdvancedTools] = useState<boolean>(false);
   const [settings, setSettings] = useState<LocateGoSettings>({
     maxDistanceKm: 3.0,
@@ -924,23 +983,34 @@ export default function App() {
         onUnlock={(code, planName, expiry) => {
           setTerminationNotice(null);
           setVipCode(code);
-          const effectivePlan = planName || 'شهر (30 يوم)';
+          const effectivePlan = planName || 'تجربة يوم';
           setActivePlanName(effectivePlan);
-          const effectiveExpiry = expiry || new Date(Date.now() + 30 * 86400 * 1000).toISOString();
+          const is1DayTrial = effectivePlan.includes('يوم') && !effectivePlan.includes('3') && !effectivePlan.includes('شهر');
+          
+          const now = new Date();
+          const effectiveActivatedAt = now.toISOString();
+          const effectiveExpiry = expiry || (is1DayTrial 
+            ? new Date(now.getTime() + 24 * 3600 * 1000).toISOString()
+            : new Date(now.getTime() + 30 * 86400 * 1000).toISOString());
+
+          setExpiryIso(effectiveExpiry);
+
           try {
-            const d = new Date(effectiveExpiry);
-            const formatted = !isNaN(d.getTime())
-              ? `${String(d.getDate()).padStart(2, '0')}/${String(d.getMonth() + 1).padStart(2, '0')}/${d.getFullYear()}`
+            const expD = new Date(effectiveExpiry);
+            const expFormatted = !isNaN(expD.getTime())
+              ? `${String(expD.getDate()).padStart(2, '0')}/${String(expD.getMonth() + 1).padStart(2, '0')}/${expD.getFullYear()}`
               : effectiveExpiry;
-            setExpiryDate(formatted);
-          } catch {
-            setExpiryDate(effectiveExpiry);
-          }
+            setExpiryDate(expFormatted);
+
+            const actFormatted = `${String(now.getDate()).padStart(2, '0')}/${String(now.getMonth() + 1).padStart(2, '0')}/${now.getFullYear()}`;
+            setSubscriptionDate(actFormatted);
+          } catch {}
 
           try {
             localStorage.setItem('vip_active_code', code);
             localStorage.setItem('vip_unlocked_session', 'true');
             localStorage.setItem('vip_plan_name', effectivePlan);
+            localStorage.setItem('vip_activated_at', effectiveActivatedAt);
             localStorage.setItem('vip_expiry_date', effectiveExpiry);
             localStorage.removeItem('vip_termination_notice');
           } catch {}
@@ -995,6 +1065,7 @@ export default function App() {
           }}
           subscriptionDate={subscriptionDate}
           expiryDate={expiryDate}
+          expiryIso={expiryIso}
           remainingHours={remainingHours}
           vipCode={vipCode}
           planName={activePlanName}
