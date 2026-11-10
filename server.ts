@@ -570,6 +570,19 @@ async function startServer() {
     }
   });
 
+  // حذف جميع أكواد الاشتراك نهائياً من قاعدة بيانات فايربيس والسيرفر
+  app.delete("/api/admin/subscriptions", async (_req: Request, res: Response) => {
+    try {
+      await subscriptionDb.deleteAllCodes();
+      return res.json({
+        success: true,
+        message: "تم حذف جميع أكواد الاشتراك بنجاح من فايربيس والسيرفر",
+      });
+    } catch (err: any) {
+      return res.status(500).json({ success: false, error: err?.message || "فشل حذف جميع الأكواد" });
+    }
+  });
+
   // مزامنة فورية بين قاعدة بيانات السيرفر وقاعدة بيانات فايربيس السحابية
   app.post("/api/admin/subscriptions/sync", async (_req: Request, res: Response) => {
     try {

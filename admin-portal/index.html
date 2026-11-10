@@ -84,6 +84,12 @@
           <i data-lucide="refresh-cw" class="w-4 h-4 text-cyan-400" id="refresh-icon"></i>
           <span class="hidden sm:inline">مزامنة</span>
         </button>
+
+        <!-- Delete All Button -->
+        <button onclick="deleteAllCodes()" title="حذف جميع الأكواد نهائياً من فايربيس والسيرفر" class="flex items-center gap-1.5 px-3 py-2 rounded-xl bg-rose-950/70 hover:bg-rose-900 border border-rose-700/60 hover:border-rose-500 text-rose-300 hover:text-rose-100 text-xs font-bold transition-all cursor-pointer shadow-sm active:scale-95">
+          <i data-lucide="trash-2" class="w-4 h-4 text-rose-400"></i>
+          <span>حذف الكل</span>
+        </button>
       </div>
     </div>
   </header>
@@ -184,13 +190,20 @@
         <input type="text" id="search-input" oninput="renderCodesList()" placeholder="البحث برمز الكود، معرف الجهاز، اسم المندوب، أو رقم الهاتف..." class="w-full h-10 pr-10 pl-4 rounded-xl bg-[#121a32]/90 border border-slate-700/80 text-white text-xs placeholder:text-slate-500 focus:outline-none focus:border-cyan-400 transition-all" />
       </div>
 
-      <div class="flex items-center gap-1 bg-[#121a32] p-1 rounded-xl border border-slate-800 overflow-x-auto" id="filter-group">
-        <button onclick="setFilter('all')" data-filter="all" class="filter-btn px-3 py-1.5 rounded-lg text-xs font-bold transition-all bg-cyan-500 text-slate-950">الكل</button>
-        <button onclick="setFilter('active')" data-filter="active" class="filter-btn px-3 py-1.5 rounded-lg text-xs font-bold transition-all text-slate-400 hover:text-white">نشط</button>
-        <button onclick="setFilter('used')" data-filter="used" class="filter-btn px-3 py-1.5 rounded-lg text-xs font-bold transition-all text-slate-400 hover:text-white">مستخدم</button>
-        <button onclick="setFilter('expired')" data-filter="expired" class="filter-btn px-3 py-1.5 rounded-lg text-xs font-bold transition-all text-slate-400 hover:text-white">منتهي</button>
-        <button onclick="setFilter('revoked')" data-filter="revoked" class="filter-btn px-3 py-1.5 rounded-lg text-xs font-bold transition-all text-slate-400 hover:text-white">معطل</button>
-        <button onclick="setFilter('pending_sync')" data-filter="pending_sync" class="filter-btn px-3 py-1.5 rounded-lg text-xs font-bold transition-all text-amber-400 hover:text-white">بانتظار المزامنة</button>
+      <div class="flex items-center gap-2">
+        <div class="flex items-center gap-1 bg-[#121a32] p-1 rounded-xl border border-slate-800 overflow-x-auto" id="filter-group">
+          <button onclick="setFilter('all')" data-filter="all" class="filter-btn px-3 py-1.5 rounded-lg text-xs font-bold transition-all bg-cyan-500 text-slate-950">الكل</button>
+          <button onclick="setFilter('active')" data-filter="active" class="filter-btn px-3 py-1.5 rounded-lg text-xs font-bold transition-all text-slate-400 hover:text-white">نشط</button>
+          <button onclick="setFilter('used')" data-filter="used" class="filter-btn px-3 py-1.5 rounded-lg text-xs font-bold transition-all text-slate-400 hover:text-white">مستخدم</button>
+          <button onclick="setFilter('expired')" data-filter="expired" class="filter-btn px-3 py-1.5 rounded-lg text-xs font-bold transition-all text-slate-400 hover:text-white">منتهي</button>
+          <button onclick="setFilter('revoked')" data-filter="revoked" class="filter-btn px-3 py-1.5 rounded-lg text-xs font-bold transition-all text-slate-400 hover:text-white">معطل</button>
+          <button onclick="setFilter('pending_sync')" data-filter="pending_sync" class="filter-btn px-3 py-1.5 rounded-lg text-xs font-bold transition-all text-amber-400 hover:text-white">بانتظار المزامنة</button>
+        </div>
+
+        <button onclick="deleteAllCodes()" title="حذف جميع الأكواد نهائياً" class="shrink-0 flex items-center gap-1 px-3 py-2 rounded-xl bg-rose-950/60 hover:bg-rose-900 border border-rose-800/60 text-rose-300 hover:text-white text-xs font-bold transition-all cursor-pointer">
+          <i data-lucide="trash-2" class="w-3.5 h-3.5 text-rose-400"></i>
+          <span class="hidden md:inline">حذف الكل</span>
+        </button>
       </div>
     </div>
 
@@ -1088,6 +1101,64 @@
       }
 
       showToast(`✅ تم حذف الكود (${code}) نهائياً ولن يعود أبداً`);
+    }
+
+    async function deleteAllCodes() {
+      const total = allCodes.length;
+      if (total === 0) {
+        showToast('لا توجد أي أكواد لحذفها حالياً');
+        return;
+      }
+
+      const confirmed = confirm(
+        `⚠️ تحذير أمني هام:\n\nهل أنت متأكد من حذف جميع أكواد الاشتراك (${total} كود) نهائياً؟\n\n- سيتم مسحها تماماً وفوراً من قاعدة بيانات فايربيس السحابية.\n- سيتم مسحها من السيرفر.\n- لن يتمكن أي سائق من استخدامها وسيتم إغلاق التطبيق لديهم فوراً.\n- هذا الإجراء نهائي ولا يمكن التراجع عنه!`
+      );
+      if (!confirmed) return;
+
+      const doubleCheck = prompt('لتأكيد الحذف الشامل لجميع الأكواد، اكتب كلمة (حذف) أو (delete) أدناه:');
+      if (!doubleCheck || (doubleCheck.trim() !== 'حذف' && doubleCheck.trim().toLowerCase() !== 'delete')) {
+        showToast('تم إلغاء عملية الحذف');
+        return;
+      }
+
+      showToast(`جاري حذف جميع الأكواد (${total})...`);
+
+      // 1. تسجيل كافة الأكواد الحالية في قائمة الشواهد المحذوفة (Tombstones) لمنع استعادتها
+      allCodes.forEach(c => {
+        if (c.code) addDeletedTombstone(c.code);
+        if (c.id) addDeletedTombstone(c.id);
+      });
+
+      // 2. تصفير القائمة محلياً فوراً وتحديث الشاشة والإحصائيات
+      allCodes = [];
+      setOfflineQueue([]);
+      saveOfflineCache([]);
+      calculateAndUpdateStats();
+      renderCodesList();
+
+      // 3. حذف جميع الأكواد من قاعدة بيانات فايربيس مباشرة مع انتظار الاكتمال (await)
+      let fbOk = false;
+      try {
+        const cleanFirebase = getCleanFirebaseUrl();
+        const res = await fetch(`${cleanFirebase}/activation_codes.json`, {
+          method: 'DELETE'
+        });
+        if (res.ok) fbOk = true;
+      } catch (err) {
+        console.warn('Firebase bulk delete error:', err);
+      }
+
+      // 4. حذف جميع الأكواد من السيرفر الخلفي أيضاً
+      try {
+        await fetch(`${getServerBaseUrl()}/api/admin/subscriptions`, {
+          method: 'DELETE',
+          headers: getAdminHeaders()
+        });
+      } catch (err) {
+        console.warn('Server bulk delete error:', err);
+      }
+
+      showToast(`✅ تم حذف جميع الأكواد (${total}) نهائياً من فايربيس والسيرفر بنجاح`);
     }
 
     // ----------------------------------------------------

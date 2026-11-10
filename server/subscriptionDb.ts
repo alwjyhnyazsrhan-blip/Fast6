@@ -418,6 +418,29 @@ export class SubscriptionDatabase {
     return true;
   }
 
+  public async deleteAllCodes(): Promise<boolean> {
+    this.dbData.deletedCodes = this.dbData.deletedCodes || {};
+    const count = Object.keys(this.dbData.codes).length;
+    for (const [code, item] of Object.entries(this.dbData.codes)) {
+      this.dbData.deletedCodes[code] = Date.now();
+      if (item.id) this.dbData.deletedCodes[item.id] = Date.now();
+    }
+    this.dbData.codes = {};
+    this.scheduleSave();
+    console.log(`[SubscriptionDatabase] 🗑️ All codes deleted (${count} codes removed)`);
+
+    try {
+      const cleanBase = FIREBASE_DB_URL.replace(/\/+$/, '');
+      const res = await fetch(`${cleanBase}/activation_codes.json`, {
+        method: 'DELETE',
+      });
+      return res.ok;
+    } catch (err) {
+      console.warn('[SubscriptionDatabase] deleteAllCodes Firebase error:', err);
+      return false;
+    }
+  }
+
   public async syncCodeToFirebase(record: SubscriptionCode): Promise<boolean> {
     // التحقق الصارم: إذا كان الكود أو المعرف مسجلاً كمحذوف، يُمنع منعاً باتاً رفعه أو حفظه في فايربيس!
     this.dbData.deletedCodes = this.dbData.deletedCodes || {};
