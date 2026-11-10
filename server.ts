@@ -553,17 +553,17 @@ async function startServer() {
     }
   });
 
-  // حذف كود اشتراك
-  app.delete("/api/admin/subscriptions/:id", (req: Request, res: Response) => {
+  // حذف كود اشتراك نهائياً مع انتظار اكتمال الحذف في فايربيس والسيرفر
+  app.delete("/api/admin/subscriptions/:id", async (req: Request, res: Response) => {
     try {
       const { id } = req.params;
-      const deleted = subscriptionDb.deleteCode(id);
+      const deleted = await subscriptionDb.deleteCode(id);
       if (!deleted) {
-        return res.status(404).json({ success: false, error: "كود الاشتراك غير موجود" });
+        return res.status(404).json({ success: false, error: "كود الاشتراك غير موجود أو تم حذفه مسبقاً" });
       }
       return res.json({
         success: true,
-        message: "تم حذف كود الاشتراك بنجاح",
+        message: "تم حذف كود الاشتراك نهائياً من فايربيس والسيرفر",
       });
     } catch (err: any) {
       return res.status(500).json({ success: false, error: err?.message || "فشل الحذف" });

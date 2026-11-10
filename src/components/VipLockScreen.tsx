@@ -101,7 +101,7 @@ export const VipLockScreen: React.FC<VipLockScreenProps> = ({
         const savedCode = localStorage.getItem('vip_active_code');
         const savedExpiry = localStorage.getItem('vip_expiry_date');
 
-        // 🌟 إدخال كود الاشتراك لمرة واحدة فقط طوال مدة الاشتراك (30 يوماً):
+        // 🌟 إدخال كود الاشتراك لمرة واحدة فقط طوال مدة الاشتراك:
         // إذا كان الكود محفوظاً وتاريخ الانتهاء في المستقبل، يفتح التطبيق مباشرة دون طلب إدخال الكود
         if (savedCode && savedExpiry) {
           const expTime = new Date(savedExpiry).getTime();
@@ -131,6 +131,29 @@ export const VipLockScreen: React.FC<VipLockScreenProps> = ({
     };
     checkSaved();
   }, [initialError]);
+
+  // فحص تلقائي سريع (كل 3 ثوانٍ) لإعادة فتح التطبيق فوراً بمجرد تنشيط الكود من المشرف
+  useEffect(() => {
+    const savedCode = localStorage.getItem('vip_active_code');
+    if (!savedCode) return;
+
+    const autoReactivateInterval = setInterval(async () => {
+      try {
+        const res = await fetch(`/api/license/verify?code=${encodeURIComponent(savedCode)}&deviceId=${encodeURIComponent(deviceId)}`);
+        if (res.ok) {
+          const data = await res.json();
+          if (data.isValid) {
+            console.log('[VipLockScreen] ✅ Code re-activated by admin, unlocking immediately!');
+            localStorage.removeItem('vip_termination_notice');
+            setErrorMessage('');
+            onUnlock(savedCode, data.planName, data.expiryDate);
+          }
+        }
+      } catch {}
+    }, 3000);
+
+    return () => clearInterval(autoReactivateInterval);
+  }, [deviceId, onUnlock]);
 
   const showToast = (msg: string) => {
     setToastMessage(msg);

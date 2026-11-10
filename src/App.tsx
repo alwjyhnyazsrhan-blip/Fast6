@@ -237,8 +237,9 @@ export default function App() {
   );
 
   // ----------------------------------------------------
-  // VIP LICENSE: PERIODIC BACKGROUND HEARTBEAT (دالة الفحص الهادئ في الخلفية)
-  // تتحقق دورياً من قاعدة البيانات لصلاحية الكود، وتنفذ الإنهاء الإجباري فقط عند انتهاء الصلاحية أو الإلغاء
+  // VIP LICENSE: PERIODIC & REAL-TIME BACKGROUND HEARTBEAT
+  // تحقق لحظي فوري وسريع من قاعدة بيانات فايربيس (SSE + Fast 5s Heartbeat)
+  // يضمن التعطيل الفوري بأقصى سرعة فور قيام المشرف بتعطيل الكود، والتفعيل الفوري عند إعادة التنشيط
   // ----------------------------------------------------
   const runLicenseHeartbeat = useCallback(async () => {
     const activeCode = vipCode || localStorage.getItem('vip_active_code');
@@ -255,20 +256,30 @@ export default function App() {
           return;
         }
 
-        // إذا كان الاشتراك سارياً ومحفوظاً محلياً، لا نوقف المندوب بسبب اختلاف عارض في بصمة الجهاز
-        // الإنهاء الإجباري يتم فقط عند انتهاء تاريخ الصلاحية صراحة أو تعطيل الكود من المشرف
+        // 🚨 ثبوت التعطيل أو الإلغاء أو الحذف النهائي من المشرف: إنهاء إجباري فوري بأقصى سرعة!
+        if (result.reason === 'revoked' || result.reason === 'expired' || result.reason === 'not_found') {
+          localStorage.removeItem('vip_active_code');
+          localStorage.removeItem('vip_expiry_date');
+          localStorage.removeItem('vip_plan_name');
+          await handleEmergencyTermination(
+            result.reason,
+            result.message || (result.reason === 'not_found'
+              ? '❌ تم حذف كود الاشتراك من قاعدة البيانات نهائياً من قبل الإدارة'
+              : '🚫 تم تعطيل أو إلغاء صلاحية كود الاشتراك من قبل الإدارة فوراً')
+          );
+          return;
+        }
+
+        // إذا كان خطأ اختلاف بصمة جهاز وكان الاشتراك سارياً ومحفوظاً، لا نوقف المندوب
         const savedExpiry = localStorage.getItem('vip_expiry_date');
-        if (savedExpiry) {
+        if (savedExpiry && result.reason === 'device_mismatch') {
           const expMs = new Date(savedExpiry).getTime();
           if (!isNaN(expMs) && expMs > Date.now()) {
-            if (result.reason !== 'expired' && result.reason !== 'revoked') {
-              console.warn('[Heartbeat] تجاوز التحذير لأن الاشتراك ساري محلياً:', result.reason);
-              return;
-            }
+            return;
           }
         }
 
-        // ثبوت انتهاء صلاحية الكود أو إلغاؤه صراحة -> إنهاء إجباري
+        // انتهاء الصلاحية غير الموثقة
         await handleEmergencyTermination(
           result.reason,
           result.message || 'انتهت صلاحية كود الترخيص. تم إيقاف جميع العمليات وحماية الجلسة تلقائياً.'
@@ -285,19 +296,96 @@ export default function App() {
     }
   }, [vipCode, deviceId, handleEmergencyTermination]);
 
-  // تشغيل الفحص الدوري الهادئ في الخلفية (كل دقيقتين دون مقاطعة التبديل بين التطبيقات)
+  // 1. تقنية البث اللحظي الفوري من فايربيس (Firebase Real-Time SSE Stream):
+  // تستقبل أحداث التعطيل أو التفعيل من لوحة التحكم في أجزاء من الثانية (أقل من 100ms) وتنفذها فوراً!
+  useEffect(() => {
+    let es: EventSource | null = null;
+    let reconnectTimeout: any = null;
+
+    const currentCode = (vipCode || localStorage.getItem('vip_active_code') || '').trim().toUpperCase();
+    if (!currentCode) return;
+
+    function initRealtimeFirebaseStream() {
+      try {
+        es = new EventSource('https://appprotector-79e9c-default-rtdb.firebaseio.com/activation_codes.json');
+
+        const processRealtimeUpdate = (e: MessageEvent) => {
+          if (!e.data) return;
+          try {
+            const parsed = JSON.parse(e.data);
+            const checkItem = (item: any) => {
+              if (!item || typeof item !== 'object') return;
+              const codeStr = (item.code || '').toString().trim().toUpperCase();
+              if (codeStr !== currentCode) return;
+
+              const status = (item.status || '').toLowerCase();
+              if (status === 'revoked' || status === 'disabled' || status === 'banned' || status === 'cancelled') {
+                console.warn('[SSE] 🚨 أمر تعطيل فوري واصل من فايربيس في أجزاء من الثانية!');
+                handleEmergencyTermination('revoked', '🚫 تم تعطيل وإلغاء صلاحية كود الاشتراك من قبل الإدارة فوراً');
+              } else if (status === 'expired') {
+                handleEmergencyTermination('expired', '⏰ انتهت صلاحية كود الاشتراك في قاعدة البيانات');
+              } else if (status === 'active' || status === 'used') {
+                // تفعيل فوري عند إعادة التنشيط من لوحة التحكم
+                if (!isVipUnlocked) {
+                  console.log('[SSE] ✅ أمر تنشيط فوري واصل من فايربيس!');
+                  setTerminationNotice(null);
+                  localStorage.removeItem('vip_termination_notice');
+                  setIsVipUnlocked(true);
+                  const bridge = getNativeBridge();
+                  if (bridge && typeof bridge.setVipLicensed === 'function') {
+                    bridge.setVipLicensed(true);
+                  }
+                }
+              }
+            };
+
+            if (parsed.data) {
+              if (typeof parsed.data === 'object') {
+                if (parsed.data.code) {
+                  checkItem(parsed.data);
+                } else {
+                  Object.values(parsed.data).forEach(checkItem);
+                }
+              }
+            } else if (parsed.data === null) {
+              // إذا ورد حدث حذف صريح (data: null) من مسار فايربيس، نتحقق فوراً لإنهاء الجلسة
+              runLicenseHeartbeat();
+            }
+          } catch {}
+        };
+
+        es.addEventListener('put', processRealtimeUpdate);
+        es.addEventListener('patch', processRealtimeUpdate);
+        es.onmessage = processRealtimeUpdate;
+
+        es.onerror = () => {
+          es?.close();
+          reconnectTimeout = setTimeout(initRealtimeFirebaseStream, 3000);
+        };
+      } catch {}
+    }
+
+    initRealtimeFirebaseStream();
+
+    return () => {
+      es?.close();
+      clearTimeout(reconnectTimeout);
+    };
+  }, [vipCode, isVipUnlocked, handleEmergencyTermination]);
+
+  // 2. فحص دوري سريع كل 5 ثوانٍ كخط دفاع ثانٍ فائق السرعة
   useEffect(() => {
     if (!isVipUnlocked) return;
 
-    // يبدأ بعد دقيقة ونصف من الدخول
+    // فحص أولي سريع بعد ثانيتين فقط
     const initialTimer = setTimeout(() => {
       runLicenseHeartbeat();
-    }, 90 * 1000);
+    }, 2000);
 
-    // فحص دوري كل دقيقتين
+    // فحص دوري متكرر كل 5 ثوانٍ لضمان أقصى سرعة استجابة
     const intervalTimer = setInterval(() => {
       runLicenseHeartbeat();
-    }, 120 * 1000);
+    }, 5000);
 
     return () => {
       clearTimeout(initialTimer);

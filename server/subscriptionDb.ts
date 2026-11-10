@@ -36,6 +36,7 @@ export interface SubscriptionDbSchema {
   version: number;
   updatedAt: string;
   codes: Record<string, SubscriptionCode>;
+  deletedCodes?: Record<string, number>;
 }
 
 export interface CreateSubscriptionPayload {
@@ -128,8 +129,9 @@ export class SubscriptionDatabase {
         const raw = fs.readFileSync(this.dbFilePath, 'utf-8');
         const parsed = JSON.parse(raw);
         if (parsed && typeof parsed.codes === 'object') {
+          parsed.deletedCodes = parsed.deletedCodes || {};
           console.log(
-            `[SubscriptionDatabase] Loaded ${Object.keys(parsed.codes).length} subscription code(s).`
+            `[SubscriptionDatabase] Loaded ${Object.keys(parsed.codes).length} subscription code(s), ${Object.keys(parsed.deletedCodes).length} permanent tombstone(s).`
           );
           return parsed;
         }
@@ -143,10 +145,8 @@ export class SubscriptionDatabase {
       version: 1,
       updatedAt: new Date().toISOString(),
       codes: {},
+      deletedCodes: {},
     };
-
-    // Seed initial codes if empty
-    this.seedDefaultCodes(initialDb);
     return initialDb;
   }
 
@@ -378,17 +378,54 @@ export class SubscriptionDatabase {
     return existing;
   }
 
-  public deleteCode(codeOrId: string): boolean {
+  public async deleteCode(codeOrId: string): Promise<boolean> {
     const existing = this.getCode(codeOrId);
-    if (!existing) return false;
-    const targetId = existing.id;
-    delete this.dbData.codes[existing.code];
+    const targetKey = this.normalizeCode(codeOrId);
+    
+    // تسجيل الكود ومعرفه في قائمة شواهد الحذف النهائية الدائمة لمنع أي استعادة تلقائية
+    this.dbData.deletedCodes = this.dbData.deletedCodes || {};
+    this.dbData.deletedCodes[targetKey] = Date.now();
+    
+    let targetId = codeOrId;
+    let targetCode = targetKey;
+
+    if (existing) {
+      targetId = existing.id;
+      targetCode = existing.code;
+      this.dbData.deletedCodes[existing.code] = Date.now();
+      if (existing.id) this.dbData.deletedCodes[existing.id] = Date.now();
+      delete this.dbData.codes[existing.code];
+    } else {
+      delete this.dbData.codes[targetKey];
+      // مسح أي تطابق عبر ID
+      for (const [k, v] of Object.entries(this.dbData.codes)) {
+        if (v.id === codeOrId || v.code === targetKey) {
+          targetId = v.id;
+          targetCode = v.code;
+          delete this.dbData.codes[k];
+          this.dbData.deletedCodes[v.code] = Date.now();
+          this.dbData.deletedCodes[v.id] = Date.now();
+        }
+      }
+    }
+
     this.scheduleSave();
-    this.deleteCodeFromFirebase(targetId).catch(() => {});
+    console.log(`[SubscriptionDatabase] 🗑️ Permanent deletion initiated for code: ${targetCode} (ID: ${targetId})`);
+
+    // الحذف الصريح من قاعدة بيانات فايربيس مع انتظار اكتمال العملية (await)
+    const fbDeleted = await this.deleteCodeFromFirebase(targetId, targetCode);
+    console.log(`[SubscriptionDatabase] Firebase delete status for ${targetCode}: ${fbDeleted ? 'SUCCESS' : 'COMPLETED/OFFLINE'}`);
     return true;
   }
 
   public async syncCodeToFirebase(record: SubscriptionCode): Promise<boolean> {
+    // التحقق الصارم: إذا كان الكود أو المعرف مسجلاً كمحذوف، يُمنع منعاً باتاً رفعه أو حفظه في فايربيس!
+    this.dbData.deletedCodes = this.dbData.deletedCodes || {};
+    if (this.dbData.deletedCodes[record.code] || (record.id && this.dbData.deletedCodes[record.id])) {
+      console.warn(`[SubscriptionDatabase] 🛑 Blocked auto-sync/recreation of deleted code: ${record.code}`);
+      return false;
+    }
+
     try {
       const payload = toFirebasePayload(record);
       const cleanBase = FIREBASE_DB_URL.replace(/\/+$/, '');
@@ -399,20 +436,51 @@ export class SubscriptionDatabase {
       });
       return res.ok;
     } catch (err) {
-      // Offline fallback: log and continue seamlessly
       console.warn(`[SubscriptionDatabase] Offline notice: Synced locally, Firebase sync deferred: ${record.code}`);
       return false;
     }
   }
 
-  public async deleteCodeFromFirebase(id: string): Promise<boolean> {
+  public async deleteCodeFromFirebase(id: string, code?: string): Promise<boolean> {
     try {
       const cleanBase = FIREBASE_DB_URL.replace(/\/+$/, '');
-      const res = await fetch(`${cleanBase}/activation_codes/${id}.json`, {
+      let success = true;
+
+      // 1. الحذف المباشر باستخدام المعرف كـ Key في فايربيس مع الانتظار (await)
+      const resId = await fetch(`${cleanBase}/activation_codes/${id}.json`, {
         method: 'DELETE',
       });
-      return res.ok;
-    } catch {
+      if (!resId.ok) success = false;
+
+      // 2. إذا كان الكود يختلف عن المعرف، نرسل طلب حذف للمفتاح الإضافي لضمان عدم وجوده تحت كود الاشتراك
+      if (code && code !== id) {
+        await fetch(`${cleanBase}/activation_codes/${code}.json`, {
+          method: 'DELETE',
+        }).catch(() => {});
+      }
+
+      // 3. فحص إضافي وتنظيف أي سجلات في فايربيس تحمل نفس الـ id أو code
+      try {
+        const checkRes = await fetch(`${cleanBase}/activation_codes.json`);
+        if (checkRes.ok) {
+          const allRemote = await checkRes.json();
+          if (allRemote && typeof allRemote === 'object') {
+            for (const [key, val] of Object.entries(allRemote)) {
+              if (val && typeof val === 'object') {
+                const itemCode = (val as any).code?.toString().trim().toUpperCase();
+                const itemId = (val as any).id;
+                if (key === id || key === code || itemId === id || itemCode === this.normalizeCode(code || id)) {
+                  await fetch(`${cleanBase}/activation_codes/${key}.json`, { method: 'DELETE' });
+                }
+              }
+            }
+          }
+        }
+      } catch {}
+
+      return success;
+    } catch (err) {
+      console.warn('[SubscriptionDatabase] deleteCodeFromFirebase error:', err);
       return false;
     }
   }
@@ -426,9 +494,32 @@ export class SubscriptionDatabase {
       const remoteCodes = Object.values(data);
       let count = 0;
 
-      for (const item of remoteCodes) {
+      this.dbData.deletedCodes = this.dbData.deletedCodes || {};
+
+      // 1. تنظيف أي كود موجود في فايربيس إذا كان المشرف قد حذفه محلياً وسُجل في الـ tombstones
+      for (const [key, val] of Object.entries(data)) {
+        if (!val || typeof val !== 'object') continue;
+        const rCode = val.code ? this.normalizeCode(val.code) : '';
+        const rId = val.id || key;
+        if ((rCode && this.dbData.deletedCodes[rCode]) || (rId && this.dbData.deletedCodes[rId])) {
+          console.log(`[SubscriptionDatabase] 🧹 Purging tombstoned deleted code from Firebase: ${rCode || rId}`);
+          await fetch(`${cleanBase}/activation_codes/${key}.json`, { method: 'DELETE' }).catch(() => {});
+          delete data[key];
+        }
+      }
+
+      const activeRemoteCodes = Object.values(data);
+
+      // 2. تحديث واستيراد الأكواد النشطة الحقيقية من فايربيس
+      for (const item of activeRemoteCodes) {
         if (!item || !item.code) continue;
         const normCode = this.normalizeCode(item.code);
+        
+        // تجاوز الأكواد المحذوفة
+        if (this.dbData.deletedCodes[normCode] || (item.id && this.dbData.deletedCodes[item.id])) {
+          continue;
+        }
+
         const existing = this.dbData.codes[normCode];
         if (!existing) {
           const imported: SubscriptionCode = {
@@ -470,10 +561,19 @@ export class SubscriptionDatabase {
         }
       }
 
+      // 3. الحذف العكسي الصارم (Reverse Purge):
+      // إذا تم حذف الكود من فايربيس السحابية من قبل المشرف، يتم حذفه فوراً من الذاكرة المحلية والملف
+      // ويُمنع منعاً باتاً إعادة رفعه أو استعادته!
       for (const localCode of Object.values(this.dbData.codes)) {
-        const foundInRemote = remoteCodes.some((r) => r && this.normalizeCode(r.code) === localCode.code);
+        const foundInRemote = activeRemoteCodes.some(
+          (r) => r && (this.normalizeCode(r.code) === localCode.code || r.id === localCode.id)
+        );
         if (!foundInRemote) {
-          await this.syncCodeToFirebase(localCode);
+          console.log(`[SubscriptionDatabase] 🗑️ Code deleted in Firebase, purging from server memory: ${localCode.code}`);
+          delete this.dbData.codes[localCode.code];
+          this.dbData.deletedCodes[localCode.code] = Date.now();
+          if (localCode.id) this.dbData.deletedCodes[localCode.id] = Date.now();
+          count++;
         }
       }
 

@@ -522,6 +522,32 @@
     // ----------------------------------------------------
     // الحفظ المباشر في قاعدة بيانات Firebase السحابية دون تخزين محلي
     // ----------------------------------------------------
+    const TOMBSTONES_KEY = 'locate_vip_deleted_tombstones';
+
+    function getDeletedTombstones() {
+      try {
+        const raw = localStorage.getItem(TOMBSTONES_KEY);
+        return raw ? new Set(JSON.parse(raw)) : new Set();
+      } catch {
+        return new Set();
+      }
+    }
+
+    function addDeletedTombstone(val) {
+      if (!val) return;
+      try {
+        const set = getDeletedTombstones();
+        set.add(String(val).trim().toUpperCase());
+        localStorage.setItem(TOMBSTONES_KEY, JSON.stringify(Array.from(set)));
+      } catch {}
+    }
+
+    function isDeletedTombstone(val) {
+      if (!val) return false;
+      const set = getDeletedTombstones();
+      return set.has(String(val).trim().toUpperCase());
+    }
+
     function saveOfflineCache(_codesList) {
       // بناءً على طلب المشرف: عدم حفظ أكواد الاشتراك في التخزين المحلي (LocalStorage)
       // جميع الأكواد تعتمد حصرياً على الحفظ السحابي في قاعدة بيانات Firebase RTDB
@@ -614,7 +640,7 @@
     }
 
     // ----------------------------------------------------
-    // DUAL SYNC & FETCH ENGINE (FIREBASE + SERVER + OFFLINE)
+    // DUAL SYNC & FETCH ENGINE (FIREBASE AUTHORITATIVE + TOMBSTONE PURGE)
     // ----------------------------------------------------
     async function syncAllData() {
       if (isSyncing) return;
@@ -632,38 +658,44 @@
           fetchFromServer()
         ]);
 
-        let mergedMap = new Map();
+        let cleanList = [];
+        const tombstones = getDeletedTombstones();
+        const cleanFirebase = getCleanFirebaseUrl();
 
-        // Put cached codes first
-        allCodes.forEach(c => {
-          if (c && c.code) mergedMap.set(c.code, c);
-        });
-
-        // Merge Server codes
-        if (serverData.status === 'fulfilled' && serverData.value) {
-          serverData.value.forEach(c => {
-            const norm = normalizeCodeObject(c);
-            if (norm) mergedMap.set(norm.code, norm);
-          });
-        }
-
-        // Merge Firebase codes (highest priority for real-time mobile sync)
+        // فايربيس هي المصدر الحقيقي المعتمد (Single Source of Truth)
         if (firebaseCodes.status === 'fulfilled' && firebaseCodes.value) {
-          firebaseCodes.value.forEach(c => {
-            const norm = normalizeCodeObject(c);
-            if (norm) mergedMap.set(norm.code, norm);
-          });
+          const rawRemote = firebaseCodes.value;
+          for (const item of rawRemote) {
+            const norm = normalizeCodeObject(item);
+            if (!norm) continue;
+
+            // إذا كان الكود أو المعرف مسجلاً كمحذوف، نقوم بمسحه فوراً ونهائياً من فايربيس
+            if (tombstones.has(norm.code) || tombstones.has(norm.id)) {
+              console.log(`[AdminPortal] 🧹 Purging tombstoned deleted code from Firebase: ${norm.code}`);
+              fetch(`${cleanFirebase}/activation_codes/${norm.id}.json`, { method: 'DELETE' }).catch(() => {});
+              continue;
+            }
+
+            cleanList.push(norm);
+          }
+        } else if (serverData.status === 'fulfilled' && serverData.value) {
+          // بديل ثانوي في حال انقطاع الاتصال المباشر بفايربيس
+          for (const item of serverData.value) {
+            const norm = normalizeCodeObject(item);
+            if (!norm) continue;
+            if (tombstones.has(norm.code) || tombstones.has(norm.id)) continue;
+            cleanList.push(norm);
+          }
         }
 
-        allCodes = Array.from(mergedMap.values()).sort((a, b) => {
+        // ترتيب الأكواد تنازلياً حسب تاريخ الإنشاء
+        allCodes = cleanList.sort((a, b) => {
           return new Date(b.createdAt).getTime() - new Date(a.createdAt).getTime();
         });
 
-        saveOfflineCache(allCodes);
         calculateAndUpdateStats();
         renderCodesList();
         setConnectionState(true, 'فايربيس متصل');
-        showToast('✅ تمت المزامنة السحابية مع قاعدة بيانات فايربيس بنجاح');
       } catch (err) {
         console.warn('Sync hiccup (falling back to offline database):', err);
         setConnectionState(false, 'وضع أوفلاين (مخزن محلياً)');
@@ -680,8 +712,14 @@
 
       const remaining = [];
       const cleanFirebase = getCleanFirebaseUrl();
+      const tombstones = getDeletedTombstones();
 
       for (const task of queue) {
+        // إذا كان الكود أو المعرف قد حُذف، نتجاهله تماماً ونمسحه من الطابور لمنع أي إعادة إنشاء له
+        if (tombstones.has(task.id) || (task.data && tombstones.has(task.data.code))) {
+          continue;
+        }
+
         try {
           if (task.type === 'CREATE' || task.type === 'UPDATE') {
             const fbRecord = toFirebaseRecord(task.data);
@@ -690,7 +728,6 @@
               headers: { 'Content-Type': 'application/json' },
               body: JSON.stringify(fbRecord)
             });
-            // Try updating server too
             try {
               await fetch(`${getServerBaseUrl()}/api/admin/subscriptions/generate`, {
                 method: 'POST',
@@ -710,7 +747,6 @@
             } catch {}
           }
         } catch (taskErr) {
-          // If network failed, keep task in remaining
           remaining.push(task);
         }
       }
@@ -987,7 +1023,7 @@
         await fetch(`${cleanFirebase}/activation_codes/${id}.json`, {
           method: 'PATCH',
           headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ status: newStatus })
+          body: JSON.stringify({ status: newStatus, last_status_change: Date.now() })
         });
         codeObj.offlinePending = false;
         saveOfflineCache(allCodes);
@@ -995,26 +1031,63 @@
         setOfflineQueue(q);
         renderCodesList();
       } catch {}
+
+      // إعلام السيرفر فوراً لتحديث الذاكرة الحية وقفل أو فتح جلسة المندوب فوراً
+      try {
+        await fetch(`${getServerBaseUrl()}/api/admin/subscriptions/${id}/${isCurrentlyRevoked ? 'activate' : 'revoke'}`, {
+          method: 'POST',
+          headers: getAdminHeaders()
+        });
+      } catch {}
     }
 
     async function deleteCode(id, code) {
-      if (!confirm(`هل أنت متأكد من حذف كود الاشتراك (${code}) نهائياً؟`)) return;
+      if (!confirm(`هل أنت متأكد من حذف كود الاشتراك (${code}) نهائياً؟\n\nتنبيه: سيتم مسحه تماماً من قاعدة بيانات فايربيس والسيرفر ولن يعود للظهور مجدداً أبداً.`)) return;
 
+      // 1. تسجيل الكود ومعرفه في قائمة شواهد الحذف الدائمة لمنع أي استرجاع أو مزامنة تلقائية
+      addDeletedTombstone(id);
+      addDeletedTombstone(code);
+
+      // 2. حذفه فوراً من الذاكرة الحية وتحديث الإحصائيات والشاشة
       allCodes = allCodes.filter(c => c.id !== id && c.code !== code);
-      saveOfflineCache(allCodes);
       calculateAndUpdateStats();
       renderCodesList();
-      enqueueOfflineAction('DELETE', id, { id, code });
-      showToast(`تم حذف الكود (${code}) محلياً`);
 
+      // 3. تنظيف أي طوابير انتظار معلقة لهذا الكود لضمان عدم إعادة إرساله
+      const q = getOfflineQueue().filter(item => item.id !== id && (!item.data || item.data.code !== code));
+      setOfflineQueue(q);
+
+      showToast(`جاري حذف الكود (${code}) نهائياً...`);
+
+      // 4. حذف مباشر وصريح من قاعدة بيانات فايربيس مع انتظار اكتمال العملية (await)
+      let fbOk = false;
       try {
         const cleanFirebase = getCleanFirebaseUrl();
-        await fetch(`${cleanFirebase}/activation_codes/${id}.json`, {
+        const res = await fetch(`${cleanFirebase}/activation_codes/${id}.json`, {
           method: 'DELETE'
         });
-        const q = getOfflineQueue().filter(item => item.id !== id);
-        setOfflineQueue(q);
-      } catch {}
+        if (res.ok) fbOk = true;
+
+        if (code && code !== id) {
+          await fetch(`${cleanFirebase}/activation_codes/${code}.json`, {
+            method: 'DELETE'
+          }).catch(() => {});
+        }
+      } catch (fbErr) {
+        console.warn('Firebase direct delete warning:', fbErr);
+      }
+
+      // 5. حذف الكود من ذاكرة السيرفر الخلفي أيضاً لضمان التزامن الكامل
+      try {
+        await fetch(`${getServerBaseUrl()}/api/admin/subscriptions/${id}`, {
+          method: 'DELETE',
+          headers: getAdminHeaders()
+        });
+      } catch (srvErr) {
+        console.warn('Server delete notification warning:', srvErr);
+      }
+
+      showToast(`✅ تم حذف الكود (${code}) نهائياً ولن يعود أبداً`);
     }
 
     // ----------------------------------------------------

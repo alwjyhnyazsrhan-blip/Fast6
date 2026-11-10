@@ -50,6 +50,8 @@ class LocateGoAccessibilityService : AccessibilityService() {
         fun isTargetPackage(pkg: String?): Boolean {
             if (pkg.isNullOrBlank()) return false
             val p = pkg.trim().lowercase()
+            // 🛡️ استبعاد قطعي وشامل لتطبيق واتساب وواتساب الأعمال وتطبيقات الدردشة: ممنوع مراقبتها أو السحب أو النقر عليها
+            if (p.contains("whatsapp") || p.contains("com.whatsapp") || p == "com.whatsapp.w4b" || p.contains("telegram")) return false
             // استثناء نظام أندرويد ولوحات المفاتيح وتطبيقنا المساعد
             if (p == "com.locatego.driver" || p.contains("android.systemui") || p.contains("inputmethod") || p.contains("launcher")) return false
             return TARGET_PACKAGES.any { p.contains(it.lowercase()) } ||
@@ -220,16 +222,15 @@ class LocateGoAccessibilityService : AccessibilityService() {
         if (!cachedAutoAccept) return
 
         val packageName: String = event.packageName?.toString() ?: ""
+        val lowerPkg = packageName.trim().lowercase()
+
+        // 🛡️ حظر قطعي لتطبيق واتساب: ممنوع منعاً باتاً مراقبة شاشة الواتساب أو فحص نصوصها أو السحب أو النقر عليها نهائياً
+        if (lowerPkg.contains("whatsapp") || lowerPkg == "com.whatsapp" || lowerPkg == "com.whatsapp.w4b" || lowerPkg.contains("telegram")) {
+            return
+        }
+
         if (!isTargetPackage(packageName)) {
-            val eventTexts = event.text?.joinToString(" ") ?: ""
-            val hasAcceptKeyword = ALL_ACCEPT_KEYWORDS.any { eventTexts.contains(it, ignoreCase = true) }
-            val rootHasAccept = if (!hasAcceptKeyword) {
-                try {
-                    val root = rootInActiveWindow
-                    ALL_ACCEPT_KEYWORDS.any { kw -> root?.findAccessibilityNodeInfosByText(kw)?.isNotEmpty() == true }
-                } catch (_: Exception) { false }
-            } else false
-            if (!hasAcceptKeyword && !rootHasAccept) return
+            return
         }
 
         currentForegroundPackage = packageName
@@ -529,6 +530,13 @@ class LocateGoAccessibilityService : AccessibilityService() {
     private fun performSwipeToAccept(node: AccessibilityNodeInfo?): Boolean {
         if (Build.VERSION.SDK_INT < Build.VERSION_CODES.N) return false
         if (node == null) return false
+
+        // 🛡️ حظر قطعي: منع السحب أو النقر أو إرسال أي إيماءات على تطبيق واتساب أو تيليجرام
+        val currentPkg = currentForegroundPackage.trim().lowercase()
+        if (currentPkg.contains("whatsapp") || currentPkg == "com.whatsapp" || currentPkg == "com.whatsapp.w4b" || currentPkg.contains("telegram")) {
+            Log.w("LocateGoService", "🚫 Blocked gesture: Target is WhatsApp/Chat - Gestures strictly forbidden!")
+            return false
+        }
 
         val displayMetrics = resources.displayMetrics
         val screenWidth = displayMetrics.widthPixels.toFloat()
