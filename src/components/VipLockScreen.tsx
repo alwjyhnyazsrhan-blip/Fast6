@@ -301,7 +301,7 @@ export const VipLockScreen: React.FC<VipLockScreenProps> = ({
           if (verifyData.isValid) {
             const nowIso = new Date().toISOString();
             const expiry = verifyData.expiryDate || new Date(Date.now() + (verifyData.durationDays || 30) * 86400 * 1000).toISOString();
-            const plan = verifyData.planName || currentPlan.durationLabelAr;
+            const plan = verifyData.planName || (verifyData.durationDays ? (verifyData.durationDays === 1 ? 'تجربة يوم' : (verifyData.durationDays <= 10 ? `${verifyData.durationDays} أيام` : `${verifyData.durationDays} يوم`)) : currentPlan.durationLabelAr);
             localStorage.setItem('vip_active_code', cleanCode);
             if (verifyData.id) {
               localStorage.setItem('vip_active_id', String(verifyData.id));
@@ -370,7 +370,7 @@ export const VipLockScreen: React.FC<VipLockScreenProps> = ({
               const nowIso = new Date().toISOString();
               const days = Number(match.duration_days || match.durationDays || currentPlan.days || 30);
               const expiry = match.expiry_date || match.expiryDate || new Date(Date.now() + days * 24 * 3600 * 1000).toISOString();
-              const plan = match.plan_name || match.planName || currentPlan.durationLabelAr;
+              const plan = match.plan_name || match.planName || (days === 1 ? 'تجربة يوم' : (days <= 10 ? `${days} أيام` : `${days} يوم`));
               localStorage.setItem('vip_active_code', cleanCode);
               if (match.id) localStorage.setItem('vip_active_id', String(match.id));
               localStorage.setItem('vip_device_id', deviceId);

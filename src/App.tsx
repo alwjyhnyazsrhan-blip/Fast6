@@ -9,6 +9,7 @@ import { SecurityShieldBadge } from './components/SecurityShieldBadge';
 import { LocateAssistantModal } from './components/LocateAssistantModal';
 import { LocateHelperDashboard } from './components/LocateHelperDashboard';
 import { AccessibilityPromptBanner } from './components/AccessibilityPromptBanner';
+import { CreateSubscriptionModal } from './components/CreateSubscriptionModal';
 import { Language } from './utils/i18n';
 import { Radio, ChevronDown, ChevronUp } from 'lucide-react';
 import { LocateGoSettings, LocateGoStatus, OrderItem, AppSource } from './types';
@@ -39,7 +40,7 @@ export default function App() {
   const initialDates = (() => {
     try {
       const savedPlan = localStorage.getItem('vip_plan_name') || 'تجربة يوم';
-      const is1DayTrial = savedPlan.includes('يوم') && !savedPlan.includes('3') && !savedPlan.includes('شهر');
+      const is1DayTrial = savedPlan.includes('تجربة يوم') || savedPlan === '1 day' || savedPlan === '1 يوم' || savedPlan === 'تجربة';
       const savedExpiry = localStorage.getItem('vip_expiry_date');
       const savedActivatedAt = localStorage.getItem('vip_activated_at');
       const now = new Date();
@@ -121,6 +122,7 @@ export default function App() {
   const [isLocating, setIsLocating] = useState<boolean>(false);
   const [isRefreshing, setIsRefreshing] = useState<boolean>(false);
   const [showAssistantModal, setShowAssistantModal] = useState<boolean>(false);
+  const [showCreateCodeModal, setShowCreateCodeModal] = useState<boolean>(false);
 
   // VIP Access Lock Screen State: يُفتح فقط إذا كان الكود محفوظاً وسارياً ولم يصدر بشأنه أمر إيقاف
   const [isVipUnlocked, setIsVipUnlocked] = useState<boolean>(() => {
@@ -1073,6 +1075,7 @@ export default function App() {
         currentDeviceId={deviceId}
         lastHeartbeatAt={lastHeartbeatAt}
         remainingHours={remainingHours}
+        onOpenCreateCode={() => setShowCreateCodeModal(true)}
         onRelock={() => {
           handleEmergencyTermination('user_relock', currentLang === 'ar' ? 'تم قفل التطبيق يدوياً والعودة لشاشة الدخول' : 'Application locked manually');
         }}
@@ -1207,6 +1210,13 @@ export default function App() {
           </div>
         </div>
       )}
+
+      {/* Modal 2: In-App Create Subscription Code by Days Modal */}
+      <CreateSubscriptionModal
+        isOpen={showCreateCodeModal}
+        onClose={() => setShowCreateCodeModal(false)}
+        currentDeviceId={deviceId}
+      />
 
       {/* Persistent Night-Mode Driver Footer */}
       <footer className="mt-auto border-t border-slate-800/80 bg-[#080c14] py-4 px-6 text-center text-xs text-slate-400">

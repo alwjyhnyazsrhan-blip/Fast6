@@ -248,28 +248,89 @@
           </div>
         </div>
 
-        <!-- Duration Preset Pills -->
+        <!-- Duration Preset Pills & Custom Days Selector -->
         <div>
-          <label class="block text-slate-300 font-bold mb-1.5">المدة المطلوبة</label>
-          <div class="grid grid-cols-2 gap-1.5" id="duration-pills">
-            <button type="button" onclick="selectDuration('trial_1_day', 1, 'تجربة يوم')" class="dur-btn p-2 rounded-xl border text-right transition-all bg-[#151f38] border-slate-700/80 text-slate-300 flex items-center gap-2">
-              <span>⚡</span><span>تجربة يوم (24 ساعة)</span>
+          <div class="flex items-center justify-between mb-1.5">
+            <label class="block text-slate-300 font-bold">مدة الاشتراك (بالأيام أو الباقات)</label>
+            <span id="duration-badge-preview" class="text-[11px] px-2.5 py-0.5 rounded-lg bg-emerald-950/90 text-emerald-300 border border-emerald-500/40 font-mono font-bold">شهر (30 يوم)</span>
+          </div>
+
+          <!-- Quick Preset Buttons Grid -->
+          <div class="grid grid-cols-3 gap-1.5 mb-2.5" id="duration-pills">
+            <button type="button" onclick="selectDuration('trial_1_day', 1, 'تجربة يوم')" class="dur-btn p-2 rounded-xl border text-center transition-all bg-[#151f38] border-slate-700/80 text-slate-300 flex items-center justify-center gap-1">
+              <span>⚡</span><span>1 يوم</span>
             </button>
-            <button type="button" onclick="selectDuration('1_month', 30, 'شهر')" class="dur-btn p-2 rounded-xl border text-right transition-all bg-emerald-950/80 border-emerald-400 text-emerald-200 font-bold flex items-center gap-2">
-              <span>📅</span><span>شهر (30 يوم)</span>
+            <button type="button" onclick="selectDuration('3_days', 3, '3 أيام')" class="dur-btn p-2 rounded-xl border text-center transition-all bg-[#151f38] border-slate-700/80 text-slate-300 flex items-center justify-center gap-1">
+              <span>⚡</span><span>3 أيام</span>
             </button>
-            <button type="button" onclick="selectDuration('2_months', 60, 'شهرين')" class="dur-btn p-2 rounded-xl border text-right transition-all bg-[#151f38] border-slate-700/80 text-slate-300 flex items-center gap-2">
-              <span>📅</span><span>شهرين (60 يوم)</span>
+            <button type="button" onclick="selectDuration('7_days', 7, 'أسبوع (7 أيام)')" class="dur-btn p-2 rounded-xl border text-center transition-all bg-[#151f38] border-slate-700/80 text-slate-300 flex items-center justify-center gap-1">
+              <span>📅</span><span>7 أيام</span>
             </button>
-            <button type="button" onclick="selectDuration('3_months', 90, '3 أشهر')" class="dur-btn p-2 rounded-xl border text-right transition-all bg-[#151f38] border-slate-700/80 text-slate-300 flex items-center gap-2">
-              <span>📅</span><span>3 أشهر (90 يوم)</span>
+            <button type="button" onclick="selectDuration('15_days', 15, '15 يوم')" class="dur-btn p-2 rounded-xl border text-center transition-all bg-[#151f38] border-slate-700/80 text-slate-300 flex items-center justify-center gap-1">
+              <span>📅</span><span>15 يوم</span>
             </button>
-            <button type="button" onclick="selectDuration('6_months', 180, '6 أشهر')" class="dur-btn p-2 rounded-xl border text-right transition-all bg-[#151f38] border-slate-700/80 text-slate-300 flex items-center gap-2">
-              <span>📅</span><span>6 أشهر (180 يوم)</span>
+            <button type="button" onclick="selectDuration('1_month', 30, 'شهر (30 يوم)')" class="dur-btn p-2 rounded-xl border text-center transition-all bg-emerald-950/80 border-emerald-400 text-emerald-200 font-bold flex items-center justify-center gap-1">
+              <span>📅</span><span>شهر (30)</span>
             </button>
-            <button type="button" onclick="selectDuration('1_year', 365, 'سنة')" class="dur-btn p-2 rounded-xl border text-right transition-all bg-[#151f38] border-slate-700/80 text-slate-300 flex items-center gap-2">
-              <span>👑</span><span>سنة (365 يوم)</span>
+            <button type="button" onclick="selectDuration('2_months', 60, 'شهرين (60 يوم)')" class="dur-btn p-2 rounded-xl border text-center transition-all bg-[#151f38] border-slate-700/80 text-slate-300 flex items-center justify-center gap-1">
+              <span>📅</span><span>شهرين (60)</span>
             </button>
+            <button type="button" onclick="selectDuration('3_months', 90, '3 أشهر (90 يوم)')" class="dur-btn p-2 rounded-xl border text-center transition-all bg-[#151f38] border-slate-700/80 text-slate-300 flex items-center justify-center gap-1">
+              <span>📅</span><span>3 أشهر (90)</span>
+            </button>
+            <button type="button" onclick="selectDuration('6_months', 180, '6 أشهر (180 يوم)')" class="dur-btn p-2 rounded-xl border text-center transition-all bg-[#151f38] border-slate-700/80 text-slate-300 flex items-center justify-center gap-1">
+              <span>📅</span><span>6 أشهر (180)</span>
+            </button>
+            <button type="button" onclick="selectDuration('1_year', 365, 'سنة (365 يوم)')" class="dur-btn p-2 rounded-xl border text-center transition-all bg-[#151f38] border-slate-700/80 text-slate-300 flex items-center justify-center gap-1">
+              <span>👑</span><span>سنة (365)</span>
+            </button>
+          </div>
+
+          <!-- Direct Custom Days Input & Stepper (تحديد عدد الأيام يدوياً بدقة) -->
+          <div class="p-3 rounded-xl bg-[#0a0f1d] border border-cyan-500/50 shadow-inner">
+            <div class="flex items-center justify-between mb-2">
+              <label class="text-xs font-bold text-cyan-300 flex items-center gap-1.5">
+                <span>🎯</span>
+                <span>تحديد عدد الأيام يدوياً (أي عدد أيام مخصص):</span>
+              </label>
+              <span class="text-[10px] text-slate-400 font-mono">1 إلى 3650 يوم</span>
+            </div>
+
+            <!-- Stepper + Number Input Row -->
+            <div class="flex items-center gap-1.5 dir-ltr">
+              <button type="button" onclick="adjustCustomDays(-10)" class="h-10 px-2.5 rounded-xl bg-slate-800 hover:bg-slate-700 active:scale-95 text-slate-200 font-bold text-xs border border-slate-700 cursor-pointer transition-all" title="إنقاص 10 أيام">-10</button>
+              <button type="button" onclick="adjustCustomDays(-1)" class="h-10 w-9 rounded-xl bg-slate-800 hover:bg-slate-700 active:scale-95 text-slate-200 font-bold text-sm border border-slate-700 cursor-pointer transition-all" title="إنقاص يوم واحد">-1</button>
+
+              <div class="flex-1 relative flex items-center">
+                <input 
+                  type="number" 
+                  id="form-custom-days" 
+                  min="1" 
+                  max="3650" 
+                  value="30" 
+                  oninput="handleCustomDaysInput(this.value)"
+                  class="w-full h-10 px-3 pl-12 rounded-xl bg-[#151f38] border border-cyan-500/60 font-mono font-black text-center text-cyan-200 text-base focus:outline-none focus:border-cyan-300 shadow-inner"
+                  placeholder="مثال: 7"
+                />
+                <span class="absolute left-3 text-slate-400 font-bold text-xs pointer-events-none">يوم</span>
+              </div>
+
+              <button type="button" onclick="adjustCustomDays(1)" class="h-10 w-9 rounded-xl bg-slate-800 hover:bg-slate-700 active:scale-95 text-slate-200 font-bold text-sm border border-slate-700 cursor-pointer transition-all" title="زيادة يوم واحد">+1</button>
+              <button type="button" onclick="adjustCustomDays(10)" class="h-10 px-2.5 rounded-xl bg-slate-800 hover:bg-slate-700 active:scale-95 text-slate-200 font-bold text-xs border border-slate-700 cursor-pointer transition-all" title="زيادة 10 أيام">+10</button>
+            </div>
+
+            <!-- Quick Day Shortcuts for Custom Durations -->
+            <div class="flex items-center justify-between text-[11px] text-slate-400 mt-2.5 pt-2 border-t border-slate-800/80">
+              <span class="text-[10px] text-slate-400 font-bold">خيارات سريعة:</span>
+              <div class="flex items-center gap-1">
+                <button type="button" onclick="setExactCustomDays(5)" class="px-2 py-0.5 rounded-lg bg-slate-800 hover:bg-cyan-950 text-cyan-300 border border-slate-700 text-[10px] font-bold cursor-pointer transition-all">5 أيام</button>
+                <button type="button" onclick="setExactCustomDays(10)" class="px-2 py-0.5 rounded-lg bg-slate-800 hover:bg-cyan-950 text-cyan-300 border border-slate-700 text-[10px] font-bold cursor-pointer transition-all">10 أيام</button>
+                <button type="button" onclick="setExactCustomDays(14)" class="px-2 py-0.5 rounded-lg bg-slate-800 hover:bg-cyan-950 text-cyan-300 border border-slate-700 text-[10px] font-bold cursor-pointer transition-all">14 يوم</button>
+                <button type="button" onclick="setExactCustomDays(20)" class="px-2 py-0.5 rounded-lg bg-slate-800 hover:bg-cyan-950 text-cyan-300 border border-slate-700 text-[10px] font-bold cursor-pointer transition-all">20 يوم</button>
+                <button type="button" onclick="setExactCustomDays(45)" class="px-2 py-0.5 rounded-lg bg-slate-800 hover:bg-cyan-950 text-cyan-300 border border-slate-700 text-[10px] font-bold cursor-pointer transition-all">45 يوم</button>
+                <button type="button" onclick="setExactCustomDays(100)" class="px-2 py-0.5 rounded-lg bg-slate-800 hover:bg-cyan-950 text-cyan-300 border border-slate-700 text-[10px] font-bold cursor-pointer transition-all">100 يوم</button>
+              </div>
+            </div>
           </div>
         </div>
 
@@ -852,7 +913,9 @@
       document.getElementById('form-device-id').value = prefillDeviceId || '';
       document.getElementById('form-driver-name').value = '';
       document.getElementById('form-driver-phone').value = '';
-      selectDuration('1_month', 30, 'شهر');
+      selectDuration('1_month', 30, 'شهر (30 يوم)');
+      const customInput = document.getElementById('form-custom-days');
+      if (customInput) customInput.value = 30;
       document.getElementById('create-modal').classList.remove('hidden');
     }
 
@@ -1299,6 +1362,7 @@
 
             <div class="flex items-center gap-1.5 self-end md:self-center">
               <button onclick="extendCode('${item.id}', 30)" class="px-2.5 py-1.5 rounded-xl bg-slate-800 hover:bg-emerald-950/60 hover:text-emerald-300 border border-slate-700 text-[11px] font-bold text-slate-300 transition-all cursor-pointer" title="تمديد 30 يوم">+30 يوم</button>
+              <button onclick="promptCustomExtend('${item.id}')" class="px-2 py-1.5 rounded-xl bg-slate-800 hover:bg-cyan-950/70 hover:text-cyan-300 border border-slate-700 text-[11px] font-bold text-slate-300 transition-all cursor-pointer" title="تمديد بعدد أيام مخصص">+ أيام</button>
               ${item.usedByDeviceId || item.targetDeviceId ? `<button onclick="unbindCode('${item.id}')" class="p-1.5 rounded-xl bg-slate-800 hover:bg-cyan-950 hover:text-cyan-300 border border-slate-700 text-slate-400 cursor-pointer" title="فك ارتباط الجهاز"><i data-lucide="unlock" class="w-4 h-4"></i></button>` : ''}
               <button onclick="toggleRevokeCode('${item.id}', ${isRevoked})" class="p-1.5 rounded-xl bg-slate-800 border border-slate-700 ${isRevoked ? 'text-rose-400 hover:text-emerald-300' : 'text-slate-400 hover:text-rose-400'} cursor-pointer" title="${isRevoked ? 'تنشيط الكود' : 'حظر الكود'}"><i data-lucide="${isRevoked ? 'lock' : 'shield-alert'}" class="w-4 h-4"></i></button>
               <button onclick="shareWhatsApp('${item.code}', '${item.planName}', ${item.durationDays}, '${item.usedByDeviceId || item.targetDeviceId || ''}', '${item.driverPhone || ''}', '${new Date(item.expiryDate).toLocaleDateString('ar-SA')}')" class="p-1.5 rounded-xl bg-slate-800 hover:bg-emerald-950 hover:text-emerald-300 border border-slate-700 text-slate-400 cursor-pointer" title="مشاركة عبر واتساب"><i data-lucide="send" class="w-4 h-4"></i></button>
@@ -1325,10 +1389,28 @@
       lucide.createIcons();
     }
 
+    function formatPlanName(days) {
+      if (days === 1) return 'تجربة يوم';
+      if (days === 2) return 'يومان';
+      if (days >= 3 && days <= 10) return `${days} أيام`;
+      if (days === 30) return 'شهر (30 يوم)';
+      if (days === 60) return 'شهرين (60 يوم)';
+      if (days === 90) return '3 أشهر (90 يوم)';
+      if (days === 180) return '6 أشهر (180 يوم)';
+      if (days === 365) return 'سنة (365 يوم)';
+      return `${days} يوم`;
+    }
+
     function selectDuration(id, days, name) {
       selectedDurationPlan = id;
       selectedDurationDays = days;
-      selectedPlanName = name;
+      selectedPlanName = name || formatPlanName(days);
+
+      const customInput = document.getElementById('form-custom-days');
+      if (customInput) customInput.value = days;
+
+      const badge = document.getElementById('duration-badge-preview');
+      if (badge) badge.innerText = `${selectedPlanName} (${days} يوم)`;
 
       document.querySelectorAll('.dur-btn').forEach(btn => {
         btn.classList.remove('bg-emerald-950/80', 'border-emerald-400', 'text-emerald-200', 'font-bold');
@@ -1340,6 +1422,52 @@
         clicked.classList.remove('bg-[#151f38]', 'border-slate-700/80', 'text-slate-300');
         clicked.classList.add('bg-emerald-950/80', 'border-emerald-400', 'text-emerald-200', 'font-bold');
       }
+    }
+
+    function handleCustomDaysInput(val) {
+      let days = parseInt(val, 10);
+      if (isNaN(days) || days < 1) days = 1;
+      if (days > 3650) days = 3650;
+
+      selectedDurationDays = days;
+      selectedDurationPlan = `custom_${days}_days`;
+      selectedPlanName = formatPlanName(days);
+
+      const badge = document.getElementById('duration-badge-preview');
+      if (badge) badge.innerText = `${selectedPlanName} (${days} يوم)`;
+
+      // Unselect preset buttons if custom days don't match any preset
+      document.querySelectorAll('.dur-btn').forEach(btn => {
+        btn.classList.remove('bg-emerald-950/80', 'border-emerald-400', 'text-emerald-200', 'font-bold');
+        btn.classList.add('bg-[#151f38]', 'border-slate-700/80', 'text-slate-300');
+      });
+    }
+
+    function adjustCustomDays(delta) {
+      const customInput = document.getElementById('form-custom-days');
+      let current = parseInt(customInput.value, 10) || 30;
+      let next = Math.max(1, Math.min(3650, current + delta));
+      customInput.value = next;
+      handleCustomDaysInput(next);
+    }
+
+    function setExactCustomDays(days) {
+      const customInput = document.getElementById('form-custom-days');
+      if (customInput) customInput.value = days;
+      handleCustomDaysInput(days);
+    }
+
+    function promptCustomExtend(id) {
+      const codeObj = allCodes.find(c => c.id === id);
+      if (!codeObj) return;
+      const input = prompt(`تمديد كود الاشتراك (${codeObj.code}):\nأدخل عدد الأيام الإضافية المراد إضافتها للاشتراك:`, '30');
+      if (!input) return;
+      const days = parseInt(input, 10);
+      if (isNaN(days) || days <= 0) {
+        showToast('يرجى إدخال عدد أيام صحيح أكبر من الصفر');
+        return;
+      }
+      extendCode(id, days);
     }
 
     function setFilter(filter) {

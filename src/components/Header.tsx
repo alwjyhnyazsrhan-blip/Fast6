@@ -9,7 +9,8 @@ import {
   LayoutDashboard, 
   RefreshCw, 
   Wifi, 
-  WifiOff 
+  WifiOff,
+  Key
 } from 'lucide-react';
 import { LocateGoStatus } from '../types';
 
@@ -24,6 +25,7 @@ interface HeaderProps {
   currentDeviceId?: string;
   lastHeartbeatAt?: number | null;
   remainingHours?: number | null;
+  onOpenCreateCode?: () => void;
 }
 
 export const Header: React.FC<HeaderProps> = ({
@@ -37,6 +39,7 @@ export const Header: React.FC<HeaderProps> = ({
   currentDeviceId,
   lastHeartbeatAt,
   remainingHours,
+  onOpenCreateCode,
 }) => {
   return (
     <header className="sticky top-0 z-40 bg-[#0c1220]/90 backdrop-blur-md border-b border-slate-800/80 px-4 py-3 sm:px-6">
@@ -109,7 +112,34 @@ export const Header: React.FC<HeaderProps> = ({
 
 
         {/* Global Controls & Action trigger */}
-        <div className="flex items-center justify-end gap-2">
+        <div className="flex items-center justify-end gap-2 flex-wrap">
+          {/* Create Code with Custom Days Button */}
+          {onOpenCreateCode && (
+            <button
+              id="btn-header-create-code"
+              onClick={onOpenCreateCode}
+              title="إنشاء كود اشتراك جديد بأي عدد أيام مخصص"
+              className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-xs font-bold transition-all border bg-emerald-950/70 hover:bg-emerald-900 text-emerald-300 border-emerald-500/40 shadow-sm cursor-pointer active:scale-95"
+            >
+              <Key className="w-3.5 h-3.5 text-emerald-400 stroke-[2.5]" />
+              <span className="hidden sm:inline">إنشاء كود بالأيام</span>
+              <span className="sm:hidden">كود</span>
+            </button>
+          )}
+
+          {/* Admin Portal Direct Link */}
+          <a
+            id="btn-header-admin-portal"
+            href="/admin-portal.html"
+            target="_blank"
+            rel="noopener noreferrer"
+            title="فتح لوحة تحكم المشرف الكاملة لإدارة الأكواد وتصديرها"
+            className="flex items-center gap-1.5 px-2.5 py-1.5 rounded-lg text-xs font-semibold transition-all border bg-slate-800/90 hover:bg-cyan-950/70 text-cyan-300 border-slate-700 hover:border-cyan-500/40 shadow-sm cursor-pointer active:scale-95"
+          >
+            <ShieldCheck className="w-3.5 h-3.5 text-cyan-400" />
+            <span className="hidden md:inline">لوحة المشرف</span>
+          </a>
+
           {/* Real Server Sync Button */}
           <button
             id="btn-refresh-server"
@@ -118,7 +148,7 @@ export const Header: React.FC<HeaderProps> = ({
             className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-xs font-semibold transition-all border bg-slate-800/90 hover:bg-slate-700/90 text-slate-200 border-slate-700 shadow-sm cursor-pointer active:scale-95"
           >
             <RefreshCw className={`w-3.5 h-3.5 text-emerald-400 ${isRefreshing ? 'animate-spin' : ''}`} />
-            <span>تحديث الطلبات</span>
+            <span className="hidden sm:inline">تحديث الطلبات</span>
           </button>
 
           {/* VIP Status Badge with Real-Time Background Heartbeat Indicator */}
