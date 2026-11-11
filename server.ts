@@ -760,10 +760,12 @@ async function startServer() {
       });
     }
 
-    const maxAllowedDelivery = device.settings.maxDistanceKm;
-    const maxAllowedPickup = device.settings.maxPickupDistanceKm ?? 2.0;
+    const maxAllowedDelivery = typeof device.settings.maxDistanceKm === "number" ? device.settings.maxDistanceKm : 3.0;
+    const maxAllowedPickup = typeof device.settings.maxPickupDistanceKm === "number" ? device.settings.maxPickupDistanceKm : 1.5;
 
-    // تم استبعاد السعر تماماً من معايير القبول أو الرفض: الاعتماد حصرياً على المسافات الجغرافية
+    // شرط المسافات الجغرافية (المعيار الأساسي الوحيد المعتمد 100%):
+    // 1. مسافة العميل / الوجهة <= الحد الأقصى المحدد (الافتراضي: 3.0 كم)
+    // 2. مسافة المتجر / المطعم <= حد مسافة المتجر المحدد (الافتراضي: 1.5 كم)
     const isDeliveryAcceptable = computedDistance <= maxAllowedDelivery;
     const isPickupAcceptable = typeof pickupDistanceKm === "number" && pickupDistanceKm > 0
       ? pickupDistanceKm <= maxAllowedPickup
@@ -773,10 +775,12 @@ async function startServer() {
     let rejectionReason: string | undefined = undefined;
     if (!deviceIsRunning) {
       rejectionReason = `أداة المندوب (${deviceId}) في وضع الإيقاف (Offline) - يرجى الضغط على زر تشغيل الأداة (Start) لبدء قبول الطلبات`;
+    } else if (!isDeliveryAcceptable && !isPickupAcceptable) {
+      rejectionReason = `تجاوز حدي المسافة معاً: مسافة العميل (${computedDistance} كم > ${maxAllowedDelivery} كم) ومسافة المتجر (${pickupDistanceKm} كم > ${maxAllowedPickup} كم)`;
     } else if (!isDeliveryAcceptable) {
-      rejectionReason = `مسافة العميل (${computedDistance} كم) تتجاوز الحد الأقصى المحدد (${maxAllowedDelivery} كم)`;
+      rejectionReason = `مسافة العميل / الوجهة (${computedDistance} كم) تتجاوز الحد الأقصى المحدد (${maxAllowedDelivery} كم)`;
     } else if (!isPickupAcceptable) {
-      rejectionReason = `مسافة المطعم (${pickupDistanceKm} كم) تتجاوز الحد الأقصى المحدد (${maxAllowedPickup} كم)`;
+      rejectionReason = `مسافة المتجر / المطعم (${pickupDistanceKm} كم) تتجاوز حد مسافة المتجر المحدد (${maxAllowedPickup} كم)`;
     }
 
     const newOrder: RealOrder = {

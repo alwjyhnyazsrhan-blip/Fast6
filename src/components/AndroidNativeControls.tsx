@@ -227,7 +227,7 @@ export const AndroidNativeControls: React.FC<AndroidNativeControlsProps> = ({
           </div>
           <span className="text-[11px] text-teal-300 font-medium flex items-center gap-1">
             <Zap className="w-3 h-3 text-teal-400" />
-            تحكم مزدوج: المطعم (≤ {settings.maxPickupDistanceKm ?? 2.0} كم) • العميل (≤ {settings.maxDistanceKm} كم) • سحب فائق (90ms)
+            تحكم مزدوج: المطعم (≤ {settings.maxPickupDistanceKm ?? 1.5} كم) • العميل (≤ {settings.maxDistanceKm ?? 3.0} كم) • سحب فائق (90ms)
           </span>
         </div>
 
@@ -265,9 +265,9 @@ export const AndroidNativeControls: React.FC<AndroidNativeControlsProps> = ({
           <span>حالة خدمة أندرويد: {status.isRunning ? 'نشطة ومتصلة' : 'متوقفة'}</span>
         </div>
         <div className="flex items-center gap-3">
-          <span>نطاق العميل: <strong className="text-emerald-400 font-bold">{settings.maxDistanceKm} كم</strong></span>
+          <span>نطاق العميل: <strong className="text-emerald-400 font-bold">{settings.maxDistanceKm ?? 3.0} كم</strong></span>
           <span>•</span>
-          <span>نطاق المطعم: <strong className="text-teal-400 font-bold">{settings.maxPickupDistanceKm ?? 2.0} كم</strong></span>
+          <span>نطاق المطعم: <strong className="text-teal-400 font-bold">{settings.maxPickupDistanceKm ?? 1.5} كم</strong></span>
           <span>•</span>
           <span>آلية القبول: <strong className="text-teal-300 font-bold">سحب فوري (90ms)</strong></span>
           <span>•</span>

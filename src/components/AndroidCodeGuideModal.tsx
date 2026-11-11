@@ -567,11 +567,12 @@ class LocateGoAccessibilityService : AccessibilityService() {
             }
         }
 
-        // المسافة الأساسية لتقييم الطلب:
-        // الشرط الأساسي والوحيد للقبول هو أن تكون "مسافة العميل / الوجهة" <= الحد الأقصى المحدد في الإعدادات (مثلاً 2 كم).
-        // أما "مسافة المطعم / الاستلام" فتكون اختيارية ومفتوحة بغض النظر عن قيمتها (حتى لو كان المطعم بعيداً).
-        val targetEvaluationDistanceKm = deliveryDistKm ?: generalDistKm ?: pickupDistKm ?: return
-        if (targetEvaluationDistanceKm <= 0.0) return
+        // المسافة الأساسية لتقييم الطلب (المعيار الأساسي الوحيد 100%):
+        // 1. مسافة العميل / الوجهة (Delivery Distance): يجب أن تكون <= الحد الأقصى المحدد (الافتراضي 3.0 كم، نطاق 0.5 - 25 كم).
+        // 2. مسافة المتجر / المطعم (Pickup Distance): يجب أن تكون <= حد مسافة المتجر (الافتراضي 1.5 كم).
+        val evalDeliveryKm = deliveryDistKm ?: generalDistKm
+        val evalPickupKm = pickupDistKm ?: generalDistKm
+        if (evalDeliveryKm == null && evalPickupKm == null) return
 
         // 4. استخراج رقم الطلب إن وجد
         var extractedOrderId: String? = null
@@ -594,28 +595,30 @@ class LocateGoAccessibilityService : AccessibilityService() {
         val customerDistrict = extractCustomerDistrict(joinedContent, orderTexts)
 
         // 8. منع تكرار النقر على نفس الطلب خلال 8 ثوانٍ لتفادي النقر المزدوج غير الضروري
-        val deduplicationKey = "\${extractedOrderId ?: \"\"}|\$targetEvaluationDistanceKm|\$payoutSar|\$storeName"
+        val deduplicationKey = "\${extractedOrderId ?: \"\"}|\${evalDeliveryKm ?: 0.0}|\${evalPickupKm ?: 0.0}|\$payoutSar|\$storeName"
         val now = System.currentTimeMillis()
         if (processedOrdersCache[deduplicationKey]?.let { now - it < 8_000 } == true) return
 
         // قراءة إعدادات السائق المحددة محلياً من SharedPreferences
         val prefs = getSharedPreferences("locate_go_prefs", Context.MODE_PRIVATE)
-        val maxAllowedKm = prefs.getFloat("max_distance_km", 2.0f).toDouble()
-        val minPayoutSar = prefs.getFloat("min_payout_sar", 0.0f).toDouble()
+        val maxAllowedDeliveryKm = prefs.getFloat("max_distance_km", 3.0f).toDouble()
+        val maxAllowedPickupKm = prefs.getFloat("max_pickup_distance_km", 1.5f).toDouble()
         val isAutoAcceptEnabled = prefs.getBoolean("auto_accept", true)
 
         Log.i(
             "LocateGoService",
-            "🎯 NEW OFFER DETECTED: Store='\$storeName' | DeliveryDist=\${deliveryDistKm ?: \"N/A\"} km (Strict Max: \$maxAllowedKm km) | PickupDist=\${pickupDistKm ?: \"N/A\"} km (Open/Optional) | EvalDist=\$targetEvaluationDistanceKm km | Payout=\$payoutSar SAR"
+            "🎯 NEW OFFER DETECTED: Store='\$storeName' | DeliveryDist=\${deliveryDistKm ?: \"N/A\"} km (Strict Max: \$maxAllowedDeliveryKm km) | PickupDist=\${pickupDistKm ?: \"N/A\"} km (Strict Max: \$maxAllowedPickupKm km) | Payout=\$payoutSar SAR"
         )
 
         // =========================================================================
-        // قاعدة الفحص والقبول الصارمة:
-        // 1. مسافة العميل / الوجهة <= الحد الأقصى للمسافة (مثلاً 2 كم).
-        // (تم استبعاد السعر تماماً من معايير القبول أو الرفض: الاعتماد حصرياً على المسافات الجغرافية)
+        // قاعدة الفحص والقبول الصارمة (المعيار الأساسي الوحيد المعتمد 100%):
+        // 1. مسافة العميل / الوجهة <= الحد الأقصى للمسافة (افتراضي 3.0 كم).
+        // 2. مسافة المتجر / المطعم <= حد مسافة المتجر (افتراضي 1.5 كم).
+        // (تم استبعاد السعر تماماً: الاعتماد حصرياً على المسافات الجغرافية)
         // =========================================================================
-        val isDeliveryWithinLimit = targetEvaluationDistanceKm <= maxAllowedKm
-        val isOrderMatching = isAutoAcceptEnabled && isDeliveryWithinLimit
+        val isDeliveryWithinLimit = evalDeliveryKm == null || evalDeliveryKm <= maxAllowedDeliveryKm
+        val isPickupWithinLimit = evalPickupKm == null || evalPickupKm <= maxAllowedPickupKm
+        val isOrderMatching = isAutoAcceptEnabled && isDeliveryWithinLimit && isPickupWithinLimit
 
         val lowerPkg = packageName.lowercase()
         val resolvedAppName = when {
@@ -1640,14 +1643,14 @@ class RenderApiClient(private val context: Context) {
         <div className="p-4 rounded-xl bg-[#090d16] border border-emerald-500/20 shadow-lg shadow-emerald-950/20">
           <div className="flex items-center gap-2 text-emerald-400 font-bold text-xs mb-1.5">
             <Navigation className="w-4 h-4" />
-            <span>1. تتبع الموقع الحي (نطاق 2.0 كم)</span>
+            <span>1. شرط المسافات الجغرافية المزدوج (المعيار الأساسي الوحيد 100%)</span>
           </div>
           <p className="text-[11px] text-slate-300 leading-relaxed">
-            خدمة خلفية دائمة <strong>Foreground Service</strong> تستهلك إحداثيات GPS بدقة عالية عبر <strong>Play Services Location</strong> وحساب المسافة الفوري بمعادلة <strong>Haversine</strong> لفلترة الطلبات.
+            تطبيق المعيار الأساسي الوحيد المعتمد: مسافة العميل/الوجهة ≤ الحد المحدد (الافتراضي: 3.0 كم، نطاق من 0.5 إلى 25 كم) <strong>و</strong> مسافة المتجر/المطعم ≤ حد مسافة المتجر (الافتراضي: 1.5 كم). لا يتم قبول أي طلب إلا بتحقق كلا الشرطين الجغرافيين معاً.
           </p>
           <div className="mt-2 text-[10px] text-emerald-400 flex items-center gap-1 font-mono">
             <CheckCircle2 className="w-3 h-3" />
-            <span>الصلاحيات: ACCESS_FINE_LOCATION و FOREGROUND_SERVICE_LOCATION</span>
+            <span>الشرط المزدوج: العميل ≤ 3.0 كم • المطعم ≤ 1.5 كم • مستبعد تماماً أي معيار للسعر</span>
           </div>
         </div>
 
@@ -1657,11 +1660,11 @@ class RenderApiClient(private val context: Context) {
             <span>2. مراقبة واعتراض فوري (Pure Observer • No-Swipe)</span>
           </div>
           <p className="text-[11px] text-slate-300 leading-relaxed">
-            مراقبة حدثية حية للشاشة (بدون أي سحب للشاشة إطلاقاً)، وفحص مسافة العميل/الوجهة مقارنة بالحد الأقصى (مثلاً 2 كم)، مع إبقاء مسافة المطعم اختيارية ومفتوحة، والنقر المباشر والفوري على زر القبول (Accept) في أقل من 10ms فور مطابقة مسافة العميل.
+            مراقبة حدثية حية للشاشة (بدون أي سحب للشاشة إطلاقاً وبدون مراقبة واتساب)، وفحص مسافة العميل ومسافة المطعم مقارنة بالحدود الجغرافية المحددة، والنقر المباشر والفوري على زر القبول (Accept) في أقل من 10ms فور مطابقة المسافتين.
           </p>
           <div className="mt-2 text-[10px] text-cyan-400 flex items-center gap-1 font-mono">
             <CheckCircle2 className="w-3 h-3" />
-            <span>الشرط: مسافة العميل ≤ الحد المحدد • مسافة المطعم مفتوحة واختيارية</span>
+            <span>الشرط: مسافة العميل ≤ 3.0 كم ومسافة المتجر ≤ 1.5 كم كمعيار وحيد معتمد 100%</span>
           </div>
         </div>
 

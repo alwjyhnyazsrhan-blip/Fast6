@@ -98,32 +98,38 @@ export const VipLockScreen: React.FC<VipLockScreenProps> = ({
   useEffect(() => {
     const checkSaved = async () => {
       try {
-        const savedCode = localStorage.getItem('vip_active_code');
-        const savedExpiry = localStorage.getItem('vip_expiry_date');
-
-        // 🌟 إدخال كود الاشتراك لمرة واحدة فقط طوال مدة الاشتراك:
-        // إذا كان الكود محفوظاً وتاريخ الانتهاء في المستقبل، يفتح التطبيق مباشرة دون طلب إدخال الكود
-        if (savedCode && savedExpiry) {
-          const expTime = new Date(savedExpiry).getTime();
-          if (!isNaN(expTime) && expTime > Date.now()) {
-            localStorage.removeItem('vip_termination_notice');
-            const savedPlan = localStorage.getItem('vip_plan_name') || (currentLang === 'ar' ? 'شهر (30 يوم)' : '1 Month (30 Days)');
-            onUnlock(savedCode, savedPlan, savedExpiry);
-            setIsInitialChecking(false);
-            return;
-          }
-        }
-
+        // 1. إذا كان هناك أمر إيقاف مسجل، نمنع الفتح التلقائي تماماً ونعرض رسالة الإلغاء
         const termination = localStorage.getItem('vip_termination_notice');
         if (termination || initialError) {
           setIsInitialChecking(false);
           return;
         }
 
-        if (savedCode) {
-          await verifyCodeOnline(savedCode, true);
-        } else {
+        const savedCode = localStorage.getItem('vip_active_code');
+        const savedExpiry = localStorage.getItem('vip_expiry_date');
+
+        if (!savedCode || !savedExpiry) {
           setIsInitialChecking(false);
+          return;
+        }
+
+        const expTime = new Date(savedExpiry).getTime();
+        if (isNaN(expTime) || expTime <= Date.now()) {
+          setIsInitialChecking(false);
+          return;
+        }
+
+        // 2. التحقق اللحظي عبر الإنترنت من السيرفر أو فايربيس للتأكد من عدم حذف أو إلغاء الكود
+        const isValidStill = await verifyCodeOnline(savedCode, true);
+        if (!isValidStill) {
+          // الكود حُذف أو أُلغي من المشرف! مسح كافة بيانات الاشتراك لمنع الفتح
+          localStorage.removeItem('vip_active_code');
+          localStorage.removeItem('vip_expiry_date');
+          localStorage.removeItem('vip_plan_name');
+          localStorage.removeItem('vip_activated_at');
+          localStorage.removeItem('vip_active_id');
+          setIsInitialChecking(false);
+          return;
         }
       } catch {
         setIsInitialChecking(false);
@@ -329,74 +335,73 @@ export const VipLockScreen: React.FC<VipLockScreenProps> = ({
         console.warn('[VipLockScreen] Server verify endpoint bypassed, falling back to database query:', serverErr);
       }
 
-      // 3. Fallback: Fetch Firebase/server database codes
-      const res = await fetch('/tables/activation_codes');
-      if (res.ok) {
-        const json = await res.json();
-        const codes = json.data || [];
-        const match = codes.find((c: any) => (c.code || '').toUpperCase() === cleanCode);
+      // 3. الفحص الاحتياطي المباشر من قاعدة بيانات Firebase RTDB
+      try {
+        const directRes = await fetch('https://appprotector-79e9c-default-rtdb.firebaseio.com/activation_codes.json');
+        if (directRes.ok) {
+          const directData = await directRes.json();
+          if (directData && typeof directData === 'object') {
+            const list: any[] = Object.values(directData);
+            const match = list.find((c: any) => (c?.code || '').toString().trim().toUpperCase() === cleanCode);
+            if (match) {
+              const status = (match.status || '').toLowerCase();
+              if (status === 'revoked' || status === 'disabled' || status === 'banned' || status === 'cancelled') {
+                if (!isSilent) setErrorMessage(currentLang === 'ar' ? '🚫 تم تعطيل أو إلغاء صلاحية هذا الكود من قبل الإدارة' : 'This code has been revoked');
+                setIsLoading(false);
+                setIsInitialChecking(false);
+                return false;
+              }
 
-        if (match) {
-          if (match.status === 'expired') {
-            if (!isSilent) setErrorMessage(currentLang === 'ar' ? 'انتهت صلاحية هذا الكود' : 'This code has expired');
-            setIsLoading(false);
-            setIsInitialChecking(false);
-            return false;
+              if (status === 'expired') {
+                if (!isSilent) setErrorMessage(currentLang === 'ar' ? '⏰ انتهت صلاحية هذا الكود' : 'This code has expired');
+                setIsLoading(false);
+                setIsInitialChecking(false);
+                return false;
+              }
+
+              const targetDev = match.target_device_id || match.targetDeviceId || match.used_by || match.usedByDeviceId;
+              if (targetDev && targetDev.trim() !== '' && !isAuthorizedDevice(targetDev, deviceId)) {
+                if (!isSilent) setErrorMessage(currentLang === 'ar' ? `⚠️ كود الاشتراك مخصص لجهاز آخر (${targetDev})` : 'Code is locked to another device');
+                setIsLoading(false);
+                setIsInitialChecking(false);
+                return false;
+              }
+
+              const nowIso = new Date().toISOString();
+              const days = Number(match.duration_days || match.durationDays || currentPlan.days || 30);
+              const expiry = match.expiry_date || match.expiryDate || new Date(Date.now() + days * 24 * 3600 * 1000).toISOString();
+              const plan = match.plan_name || match.planName || currentPlan.durationLabelAr;
+              localStorage.setItem('vip_active_code', cleanCode);
+              if (match.id) localStorage.setItem('vip_active_id', String(match.id));
+              localStorage.setItem('vip_device_id', deviceId);
+              localStorage.setItem('vip_plan_name', plan);
+              localStorage.setItem('vip_activated_at', nowIso);
+              localStorage.setItem('vip_expiry_date', expiry);
+              localStorage.removeItem('vip_termination_notice');
+
+              const bridge = getNativeBridge();
+              if (bridge && typeof bridge.setVipLicensed === 'function') {
+                bridge.setVipLicensed(true);
+              }
+
+              onUnlock(cleanCode, plan, expiry);
+              setIsLoading(false);
+              setIsInitialChecking(false);
+              return true;
+            } else {
+              // الكود غير موجود في فايربيس (تم حذفه نهائياً)
+              if (!isSilent) setErrorMessage(currentLang === 'ar' ? '❌ كود الاشتراك غير مسجل أو تم حذفه من قبل الإدارة' : 'Code not found or deleted by admin');
+              setIsLoading(false);
+              setIsInitialChecking(false);
+              return false;
+            }
           }
-
-          const targetDev = match.target_device_id || match.targetDeviceId || match.used_by || match.usedByDeviceId;
-          if (targetDev && targetDev.trim() !== '' && !isAuthorizedDevice(targetDev, deviceId)) {
-            if (!isSilent) setErrorMessage(currentLang === 'ar' ? `⚠️ كود الاشتراك مخصص لجهاز آخر (${targetDev})` : 'Code is locked to another device');
-            setIsLoading(false);
-            setIsInitialChecking(false);
-            return false;
-          }
-
-          const nowIso = new Date().toISOString();
-          const expiry = match.expiry_date || match.expiryDate || new Date(Date.now() + 30 * 24 * 3600 * 1000).toISOString();
-          localStorage.setItem('vip_active_code', cleanCode);
-          localStorage.setItem('vip_device_id', deviceId);
-          localStorage.setItem('vip_plan_name', match.plan_name || match.plan || currentPlan.durationLabelAr);
-          localStorage.setItem('vip_activated_at', nowIso);
-          localStorage.setItem('vip_expiry_date', expiry);
-          localStorage.removeItem('vip_termination_notice');
-
-          const bridge = getNativeBridge();
-          if (bridge && typeof bridge.setVipLicensed === 'function') {
-            bridge.setVipLicensed(true);
-          }
-
-          onUnlock(cleanCode, match.plan_name || match.plan || currentPlan.durationLabelAr, expiry);
-          setIsLoading(false);
-          setIsInitialChecking(false);
-          return true;
         }
+      } catch (fbErr) {
+        console.warn('[VipLockScreen] Direct Firebase check failed:', fbErr);
       }
 
-      // 4. Fallback verification: if valid format or 6+ chars
-      if (cleanCode.length >= 6) {
-        const nowIso = new Date().toISOString();
-        const days = currentPlan.days || 30;
-        const expiry = new Date(Date.now() + days * 24 * 3600 * 1000).toISOString();
-        localStorage.setItem('vip_active_code', cleanCode);
-        localStorage.setItem('vip_device_id', deviceId);
-        localStorage.setItem('vip_plan_name', currentLang === 'ar' ? currentPlan.durationLabelAr : currentPlan.durationLabelEn);
-        localStorage.setItem('vip_activated_at', nowIso);
-        localStorage.setItem('vip_expiry_date', expiry);
-        localStorage.removeItem('vip_termination_notice');
-
-        const bridge = getNativeBridge();
-        if (bridge && typeof bridge.setVipLicensed === 'function') {
-          bridge.setVipLicensed(true);
-        }
-
-        onUnlock(cleanCode, currentLang === 'ar' ? currentPlan.durationLabelAr : currentPlan.durationLabelEn, expiry);
-        setIsLoading(false);
-        setIsInitialChecking(false);
-        return true;
-      }
-
-      if (!isSilent) setErrorMessage(currentLang === 'ar' ? 'مفتاح التفعيل غير صحيح' : 'Invalid activation key');
+      if (!isSilent) setErrorMessage(currentLang === 'ar' ? '❌ كود الاشتراك غير مسجل أو تم حذفه من قبل الإدارة' : 'Code not found or deleted by admin');
       setIsLoading(false);
       setIsInitialChecking(false);
       return false;

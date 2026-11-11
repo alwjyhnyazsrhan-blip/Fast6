@@ -8,7 +8,7 @@ interface LiveStatusIndicatorProps {
   maxPickupDistanceKm?: number;
 }
 
-export const LiveStatusIndicator: React.FC<LiveStatusIndicatorProps> = ({ status, maxDistanceKm, maxPickupDistanceKm = 2.0 }) => {
+export const LiveStatusIndicator: React.FC<LiveStatusIndicatorProps> = ({ status, maxDistanceKm, maxPickupDistanceKm = 1.5 }) => {
   const acceptanceRate =
     status.totalScanned > 0 ? Math.round((status.acceptedCount / status.totalScanned) * 100) : 0;
 

@@ -80,13 +80,11 @@ export default function App() {
         }
       }
 
-      // افتراضي: تجربة يوم تبدأ من الآن وتنتهي بعد 24 ساعة بالضبط
+      // افتراضي: عرض تواريخ مؤقتة دون حفظ في التخزين المحلي حتى يتم التفعيل الفعلي
       const actD = now;
       const expD = new Date(actD.getTime() + 24 * 3600 * 1000);
       const subFormatted = `${String(actD.getDate()).padStart(2, '0')}/${String(actD.getMonth() + 1).padStart(2, '0')}/${actD.getFullYear()}`;
       const expFormatted = `${String(expD.getDate()).padStart(2, '0')}/${String(expD.getMonth() + 1).padStart(2, '0')}/${expD.getFullYear()}`;
-      localStorage.setItem('vip_activated_at', actD.toISOString());
-      localStorage.setItem('vip_expiry_date', expD.toISOString());
       return {
         subDate: subFormatted,
         expDate: expFormatted,
@@ -124,21 +122,19 @@ export default function App() {
   const [isRefreshing, setIsRefreshing] = useState<boolean>(false);
   const [showAssistantModal, setShowAssistantModal] = useState<boolean>(false);
 
-  // VIP Access Lock Screen State: يُدخل المستخدم كود الاشتراك لمرة واحدة فقط ويبقى مفتوحاً طوال مدة الاشتراك
+  // VIP Access Lock Screen State: يُفتح فقط إذا كان الكود محفوظاً وسارياً ولم يصدر بشأنه أمر إيقاف
   const [isVipUnlocked, setIsVipUnlocked] = useState<boolean>(() => {
     try {
+      const termination = localStorage.getItem('vip_termination_notice');
+      if (termination) return false;
+
       const savedCode = localStorage.getItem('vip_active_code');
       const savedExpiry = localStorage.getItem('vip_expiry_date');
       if (savedCode && savedExpiry) {
         const expTime = new Date(savedExpiry).getTime();
-        // إذا كان تاريخ الانتهاء سارياً في المستقبل، يبقى مفتوحاً تلقائياً
         if (!isNaN(expTime) && expTime > Date.now()) {
           return true;
         }
-      }
-      const bridge = (window as any)?.LocateGoNative;
-      if (bridge && typeof bridge.isVipLicensed === 'function' && bridge.isVipLicensed()) {
-        return true;
       }
     } catch {}
     return false;
@@ -154,18 +150,9 @@ export default function App() {
   const [lastHeartbeatAt, setLastHeartbeatAt] = useState<number | null>(null);
   const [remainingHours, setRemainingHours] = useState<number | null>(null);
 
-  // تنظيف أي إشعار إيقاف سابق إذا كان لدى المستخدم اشتراك ساري ومحفوظ
+  // تحميل إشعار الإيقاف إن وجد لعرضه على المندوب
   useEffect(() => {
     try {
-      const savedExpiry = localStorage.getItem('vip_expiry_date');
-      if (savedExpiry) {
-        const expTime = new Date(savedExpiry).getTime();
-        if (!isNaN(expTime) && expTime > Date.now()) {
-          localStorage.removeItem('vip_termination_notice');
-          setTerminationNotice(null);
-          return;
-        }
-      }
       const notice = consumeTerminationNotice();
       if (notice?.message) {
         setTerminationNotice(notice.message);
@@ -178,12 +165,12 @@ export default function App() {
     const bridge = getNativeBridge();
     if (bridge) {
       try {
-        const isLicensed = typeof bridge.isVipLicensed === 'function' ? bridge.isVipLicensed() : false;
+        const termination = localStorage.getItem('vip_termination_notice');
         const savedCode = localStorage.getItem('vip_active_code');
         const savedExpiry = localStorage.getItem('vip_expiry_date');
-        const hasValidLicense = isLicensed || (savedCode && savedExpiry && new Date(savedExpiry).getTime() > Date.now());
-        if (hasValidLicense && typeof bridge.setVipLicensed === 'function') {
-          bridge.setVipLicensed(true);
+        const hasValidLicense = !termination && Boolean(savedCode && savedExpiry && new Date(savedExpiry).getTime() > Date.now());
+        if (typeof bridge.setVipLicensed === 'function') {
+          bridge.setVipLicensed(hasValidLicense);
         }
       } catch {}
     }
@@ -303,6 +290,9 @@ export default function App() {
   const runLicenseHeartbeat = useCallback(async () => {
     const activeCode = vipCode || localStorage.getItem('vip_active_code');
     if (!activeCode) {
+      if (isVipUnlocked) {
+        handleEmergencyTermination('revoked', '🚫 لا يوجد كود اشتراك نشط مسجل (تم حذف الكود)');
+      }
       return;
     }
 
@@ -320,6 +310,8 @@ export default function App() {
           localStorage.removeItem('vip_active_code');
           localStorage.removeItem('vip_expiry_date');
           localStorage.removeItem('vip_plan_name');
+          localStorage.removeItem('vip_activated_at');
+          localStorage.removeItem('vip_active_id');
           await handleEmergencyTermination(
             result.reason,
             result.message || (result.reason === 'not_found'
@@ -403,13 +395,26 @@ export default function App() {
               }
             };
 
-            if (parsed.data) {
-              if (typeof parsed.data === 'object') {
-                if (parsed.data.code || parsed.data.status) {
-                  checkItem(parsed.data);
-                } else {
-                  Object.values(parsed.data).forEach(checkItem);
+            if (typeof parsed.data === 'string') {
+              const strVal = parsed.data.toLowerCase();
+              if (strVal === 'revoked' || strVal === 'disabled' || strVal === 'banned' || strVal === 'cancelled') {
+                const pathClean = (parsed.path || '').replace(/^\/+/, '').toUpperCase();
+                if (
+                  pathClean.includes(currentCode) ||
+                  (savedId && pathClean.includes(savedId)) ||
+                  pathClean.endsWith('/STATUS')
+                ) {
+                  console.warn('[SSE] 🚨 أمر تعطيل فوري واصل في مسار فرعي:', parsed.path);
+                  handleEmergencyTermination('revoked', '🚫 تم تعطيل أو إلغاء صلاحية هذا الكود من قبل الإدارة (تم حذف الكود)');
+                  return;
                 }
+                runLicenseHeartbeat();
+              }
+            } else if (parsed.data && typeof parsed.data === 'object') {
+              if (parsed.data.code || parsed.data.status) {
+                checkItem(parsed.data);
+              } else {
+                Object.values(parsed.data).forEach(checkItem);
               }
             } else if (parsed.data === null) {
               // إذا ورد حدث حذف صريح (data: null) من فايربيس
@@ -423,13 +428,13 @@ export default function App() {
                 return;
               }
 
-              if (pathPart === currentCode || (savedId && pathPart === savedId)) {
+              if (pathPart === currentCode || (savedId && pathPart === savedId) || pathPart.includes(currentCode)) {
                 console.warn('[SSE] 🚨 تم حذف كود الاشتراك الخاص بهذا الجهاز مباشرة من فايربيس!');
                 handleEmergencyTermination('revoked', '🚫 تم تعطيل أو إلغاء صلاحية هذا الكود من قبل الإدارة (تم حذف الكود)');
                 return;
               }
 
-              // التحقق الفوري كإجراء احترازي سريع
+              // التحقق الفوري كإجراء احترازي سريع لمطابقة أي ID محذوف
               runLicenseHeartbeat();
             }
           } catch {}
@@ -925,24 +930,32 @@ export default function App() {
         // Fallback local processing if server is temporarily unreachable
       }
 
-      // Fallback local Haversine computation
-      const distance = orderPayload.deliveryDistanceKm ?? orderPayload.distanceKm ?? 1.8;
+      // Fallback local computation: شرط المسافات الجغرافية (المعيار الأساسي الوحيد المعتمد 100%)
+      const deliveryDist = orderPayload.deliveryDistanceKm ?? orderPayload.distanceKm ?? 1.8;
       const pickupDist = orderPayload.pickupDistanceKm ?? 1.2;
       const payout = orderPayload.payoutSar || 18;
+
+      const deliveryLimit = settings.maxDistanceKm ?? 3.0;
+      const pickupLimit = settings.maxPickupDistanceKm ?? 1.5;
+
+      const isDeliveryOk = deliveryDist <= deliveryLimit;
+      const isPickupOk = pickupDist <= pickupLimit;
 
       let isAccepted = true;
       let rejectionReason: string | undefined = undefined;
 
-      // تم استبعاد السعر تماماً من معايير القبول أو الرفض - الاعتماد حصرياً على المسافات الجغرافية
       if (!status.isRunning) {
         isAccepted = false;
         rejectionReason = `أداة المندوب (${deviceId}) في وضع الإيقاف (Offline) - يرجى الضغط على زر تشغيل الأداة (Start) لبدء قبول الطلبات`;
-      } else if (distance > settings.maxDistanceKm) {
+      } else if (!isDeliveryOk && !isPickupOk) {
         isAccepted = false;
-        rejectionReason = `مسافة العميل (${distance} كم) تتجاوز الحد الأقصى المحدد (${settings.maxDistanceKm} كم)`;
-      } else if (settings.maxPickupDistanceKm && pickupDist > settings.maxPickupDistanceKm) {
+        rejectionReason = `تجاوز حدي المسافة معاً: مسافة العميل (${deliveryDist} كم > ${deliveryLimit} كم) ومسافة المتجر (${pickupDist} كم > ${pickupLimit} كم)`;
+      } else if (!isDeliveryOk) {
         isAccepted = false;
-        rejectionReason = `مسافة المطعم (${pickupDist} كم) تتجاوز الحد الأقصى المحدد (${settings.maxPickupDistanceKm} كم)`;
+        rejectionReason = `مسافة العميل / الوجهة (${deliveryDist} كم) تتجاوز الحد الأقصى المحدد (${deliveryLimit} كم)`;
+      } else if (!isPickupOk) {
+        isAccepted = false;
+        rejectionReason = `مسافة المتجر / المطعم (${pickupDist} كم) تتجاوز حد مسافة المتجر المحدد (${pickupLimit} كم)`;
       }
 
       const fallbackOrder: OrderItem = {
@@ -952,9 +965,9 @@ export default function App() {
         appName: orderPayload.appName,
         storeName: orderPayload.storeName,
         customerDistrict: orderPayload.customerDistrict || 'حي الياسمين',
-        distanceKm: distance,
+        distanceKm: deliveryDist,
         pickupDistanceKm: pickupDist,
-        deliveryDistanceKm: distance,
+        deliveryDistanceKm: deliveryDist,
         payoutSar: payout,
         detectedAt: new Date(),
         status: isAccepted ? 'accepted' : 'rejected',

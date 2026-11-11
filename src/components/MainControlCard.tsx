@@ -79,7 +79,7 @@ export const MainControlCard: React.FC<MainControlCardProps> = ({
   };
 
   const adjustPickupDistance = (delta: number) => {
-    const current = settings.maxPickupDistanceKm ?? 2.0;
+    const current = settings.maxPickupDistanceKm ?? 1.5;
     const nextVal = Math.max(0.2, Math.min(25, Math.round((current + delta) * 10) / 10));
     setPickupInput(nextVal.toString());
     if (onUpdateMaxPickupDistance) {
@@ -260,7 +260,7 @@ export const MainControlCard: React.FC<MainControlCardProps> = ({
 
               {/* Center Value Pill */}
               <div className="min-w-[95px] h-9 px-2.5 rounded-lg bg-[#0e152a] border border-cyan-500/50 flex items-center justify-center shadow-inner font-mono font-extrabold text-sm text-white tracking-wider">
-                {(settings.maxPickupDistanceKm ?? 1.0).toFixed(1)} كم
+                {(settings.maxPickupDistanceKm ?? 1.5).toFixed(1)} كم
               </div>
 
               <button
@@ -281,7 +281,7 @@ export const MainControlCard: React.FC<MainControlCardProps> = ({
               </button>
             </div>
 
-            <p className="text-[11px] text-slate-400">تعديل المسافة المسموحة بينك وبين المطعم</p>
+            <p className="text-[11px] text-slate-400">تعديل حد مسافة المتجر / المطعم (الافتراضي: 1.5 كم)</p>
           </div>
 
           {/* CONTROL BOX 2: CUSTOMER DISTANCE (مسافة العميل / الوجهة) */}
@@ -291,7 +291,7 @@ export const MainControlCard: React.FC<MainControlCardProps> = ({
               <h3 className="text-sm font-bold text-emerald-200">مسافة العميل</h3>
             </div>
 
-            {/* Stepper Buttons Row: [ 1+ ] [ + ] [ 2.5 كم ] [ - ] [ -1 ] */}
+            {/* Stepper Buttons Row: [ 1+ ] [ + ] [ 3.0 كم ] [ - ] [ -1 ] */}
             <div className="flex items-center justify-center gap-2 mb-2 dir-ltr">
               <button
                 id="btn-delivery-minus-one"
@@ -312,7 +312,7 @@ export const MainControlCard: React.FC<MainControlCardProps> = ({
 
               {/* Center Value Pill */}
               <div className="min-w-[95px] h-9 px-2.5 rounded-lg bg-[#0e152a] border border-cyan-500/50 flex items-center justify-center shadow-inner font-mono font-extrabold text-sm text-white tracking-wider">
-                {(settings.maxDistanceKm ?? 2.5).toFixed(1)} كم
+                {(settings.maxDistanceKm ?? 3.0).toFixed(1)} كم
               </div>
 
               <button
@@ -333,7 +333,7 @@ export const MainControlCard: React.FC<MainControlCardProps> = ({
               </button>
             </div>
 
-            <p className="text-[11px] text-slate-400">تعديل المسافة المسموحة بين المطعم والعميل</p>
+            <p className="text-[11px] text-slate-400">تعديل الحد الأقصى لمسافة العميل / الوجهة (الافتراضي: 3.0 كم، نطاق 0.5 - 25 كم)</p>
           </div>
         </div>
 

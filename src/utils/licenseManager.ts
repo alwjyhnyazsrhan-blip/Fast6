@@ -253,6 +253,9 @@ export async function executeEmergencyTermination(options: {
   const bridge = getNativeBridge();
   if (bridge) {
     try {
+      if (typeof bridge.setVipLicensed === 'function') {
+        bridge.setVipLicensed(false);
+      }
       if (typeof bridge.killAllServices === 'function') {
         bridge.killAllServices();
       } else if (typeof bridge.stopAllServices === 'function') {
@@ -278,10 +281,13 @@ export async function executeEmergencyTermination(options: {
     }).catch(() => {});
   } catch {}
 
-  // 5. مسح بيانات الجلسة النشطة دون مسح معرف الجهاز الثابت!
+  // 5. مسح بيانات الجلسة النشطة والتواريخ والباقات بالكامل لمنع أي فتح صامت بعد الحذف
   try {
     localStorage.removeItem('vip_active_code');
-    // لا نمسح vip_device_id إطلاقاً حتى تظل بصمة الجهاز ثابته وموثقة
+    localStorage.removeItem('vip_expiry_date');
+    localStorage.removeItem('vip_plan_name');
+    localStorage.removeItem('vip_activated_at');
+    localStorage.removeItem('vip_active_id');
     localStorage.removeItem('vip_admin_auth_v1');
     sessionStorage.clear();
 
