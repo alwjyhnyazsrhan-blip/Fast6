@@ -297,6 +297,9 @@ export const VipLockScreen: React.FC<VipLockScreenProps> = ({
             const expiry = verifyData.expiryDate || new Date(Date.now() + (verifyData.durationDays || 30) * 86400 * 1000).toISOString();
             const plan = verifyData.planName || currentPlan.durationLabelAr;
             localStorage.setItem('vip_active_code', cleanCode);
+            if (verifyData.id) {
+              localStorage.setItem('vip_active_id', String(verifyData.id));
+            }
             localStorage.setItem('vip_device_id', deviceId);
             localStorage.setItem('vip_plan_name', plan);
             localStorage.setItem('vip_activated_at', nowIso);

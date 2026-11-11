@@ -372,15 +372,20 @@ export default function App() {
           if (!e.data) return;
           try {
             const parsed = JSON.parse(e.data);
+            const savedId = (localStorage.getItem('vip_active_id') || '').trim().toUpperCase();
+
             const checkItem = (item: any) => {
               if (!item || typeof item !== 'object') return;
               const codeStr = (item.code || '').toString().trim().toUpperCase();
-              if (codeStr !== currentCode) return;
+              const itemId = (item.id || '').toString().trim().toUpperCase();
+              const matchesCode = codeStr === currentCode;
+              const matchesId = savedId && (itemId === savedId || itemId === currentCode);
+              if (!matchesCode && !matchesId) return;
 
               const status = (item.status || '').toLowerCase();
               if (status === 'revoked' || status === 'disabled' || status === 'banned' || status === 'cancelled') {
-                console.warn('[SSE] 🚨 أمر تعطيل فوري واصل من فايربيس في أجزاء من الثانية!');
-                handleEmergencyTermination('revoked', '🚫 تم تعطيل وإلغاء صلاحية كود الاشتراك من قبل الإدارة فوراً');
+                console.warn('[SSE] 🚨 أمر تعطيل أو حذف فوري واصل من فايربيس في أجزاء من الثانية!');
+                handleEmergencyTermination('revoked', '🚫 تم تعطيل أو إلغاء صلاحية هذا الكود من قبل الإدارة (تم حذف الكود)');
               } else if (status === 'expired') {
                 handleEmergencyTermination('expired', '⏰ انتهت صلاحية كود الاشتراك في قاعدة البيانات');
               } else if (status === 'active' || status === 'used') {
@@ -400,14 +405,31 @@ export default function App() {
 
             if (parsed.data) {
               if (typeof parsed.data === 'object') {
-                if (parsed.data.code) {
+                if (parsed.data.code || parsed.data.status) {
                   checkItem(parsed.data);
                 } else {
                   Object.values(parsed.data).forEach(checkItem);
                 }
               }
             } else if (parsed.data === null) {
-              // إذا ورد حدث حذف صريح (data: null) من مسار فايربيس، نتحقق فوراً لإنهاء الجلسة
+              // إذا ورد حدث حذف صريح (data: null) من فايربيس
+              console.warn('[SSE] 🗑️ تم استقبال حدث حذف كود من فايربيس (data: null):', parsed.path);
+              const pathPart = (parsed.path || '').replace(/^\/+/, '').trim().toUpperCase();
+
+              if (parsed.path === '/' || !parsed.path) {
+                // تم حذف كافة الأكواد نهائياً من المشرف! تعطيل فوري وحظر بدون تأخير
+                console.warn('[SSE] 🚨 تم حذف كافة الأكواد من قاعدة البيانات! تعطيل فوري!');
+                handleEmergencyTermination('revoked', '🚫 تم حذف وتعطيل كود الاشتراك من قبل الإدارة فوراً');
+                return;
+              }
+
+              if (pathPart === currentCode || (savedId && pathPart === savedId)) {
+                console.warn('[SSE] 🚨 تم حذف كود الاشتراك الخاص بهذا الجهاز مباشرة من فايربيس!');
+                handleEmergencyTermination('revoked', '🚫 تم تعطيل أو إلغاء صلاحية هذا الكود من قبل الإدارة (تم حذف الكود)');
+                return;
+              }
+
+              // التحقق الفوري كإجراء احترازي سريع
               runLicenseHeartbeat();
             }
           } catch {}

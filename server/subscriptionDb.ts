@@ -425,12 +425,32 @@ export class SubscriptionDatabase {
       this.dbData.deletedCodes[code] = Date.now();
       if (item.id) this.dbData.deletedCodes[item.id] = Date.now();
     }
+    const currentList = Object.values(this.dbData.codes);
     this.dbData.codes = {};
     this.scheduleSave();
     console.log(`[SubscriptionDatabase] 🗑️ All codes deleted (${count} codes removed)`);
 
     try {
       const cleanBase = FIREBASE_DB_URL.replace(/\/+$/, '');
+
+      // 0. بث أمر تعطيل فوري لكافة الأكواد قبل مسحها لكي تتعطل على أجهزة السائقين في <50ms
+      try {
+        const revokePayload = JSON.stringify({
+          status: 'revoked',
+          revoked_reason: 'bulk_deleted',
+          last_status_change: Date.now(),
+        });
+        await Promise.allSettled(
+          currentList.map((item) =>
+            fetch(`${cleanBase}/activation_codes/${item.id || item.code}.json`, {
+              method: 'PATCH',
+              headers: { 'Content-Type': 'application/json' },
+              body: revokePayload,
+            })
+          )
+        );
+      } catch {}
+
       const res = await fetch(`${cleanBase}/activation_codes.json`, {
         method: 'DELETE',
       });
@@ -468,6 +488,29 @@ export class SubscriptionDatabase {
     try {
       const cleanBase = FIREBASE_DB_URL.replace(/\/+$/, '');
       let success = true;
+
+      // 0. بث أمر تعطيل فوري للـ SSE قبل الحذف مباشرة لضمان إيقاف التطبيق على جوال السائق في أجزاء من الثانية (<50ms)
+      try {
+        const revokePayload = JSON.stringify({
+          status: 'revoked',
+          revoked_reason: 'deleted_by_admin',
+          last_status_change: Date.now(),
+        });
+        await fetch(`${cleanBase}/activation_codes/${id}.json`, {
+          method: 'PATCH',
+          headers: { 'Content-Type': 'application/json' },
+          body: revokePayload,
+        });
+        if (code && code !== id) {
+          await fetch(`${cleanBase}/activation_codes/${code}.json`, {
+            method: 'PATCH',
+            headers: { 'Content-Type': 'application/json' },
+            body: revokePayload,
+          }).catch(() => {});
+        }
+      } catch (revErr) {
+        console.warn('[SubscriptionDatabase] Fast revoke before delete warning:', revErr);
+      }
 
       // 1. الحذف المباشر باستخدام المعرف كـ Key في فايربيس مع الانتظار (await)
       const resId = await fetch(`${cleanBase}/activation_codes/${id}.json`, {
@@ -627,10 +670,15 @@ export class SubscriptionDatabase {
 
     const record = this.dbData.codes[code];
     if (!record) {
+      const isDeletedTombstone = Boolean(
+        this.dbData.deletedCodes && (this.dbData.deletedCodes[code] || this.dbData.deletedCodes[rawCode])
+      );
       return {
         isValid: false,
-        reason: 'not_found',
-        message: '❌ كود الاشتراك غير مسجل في قاعدة البيانات',
+        reason: 'revoked',
+        message: isDeletedTombstone
+          ? '🚫 تم حذف وتعطيل كود الاشتراك من قبل الإدارة فوراً'
+          : '🚫 تم تعطيل أو إلغاء صلاحية هذا الكود من قبل الإدارة (تم حذف الكود)',
       };
     }
 

@@ -17,6 +17,7 @@ export interface LicenseValidationResult {
   expiryDate?: string | null;
   remainingHours?: number;
   usedBy?: string;
+  id?: string;
 }
 
 export interface TerminationNotice {
@@ -93,6 +94,7 @@ export async function validateLicenseOnline(
       }
     }
 
+    let firebaseSucceededEmpty = false;
     if (!codesList.length) {
       try {
         const directRes = await fetch(`${FIREBASE_DB_URL}/activation_codes.json`);
@@ -100,11 +102,21 @@ export async function validateLicenseOnline(
           const directData = await directRes.json();
           if (directData && typeof directData === 'object') {
             codesList = Object.values(directData);
+          } else if (directData === null) {
+            firebaseSucceededEmpty = true;
           }
         }
       } catch (directErr) {
         console.warn('[LicenseManager] Direct DB fetch failed:', directErr);
       }
+    }
+
+    if (firebaseSucceededEmpty) {
+      return {
+        isValid: false,
+        reason: 'revoked',
+        message: '🚫 تم حذف وتعطيل كود الاشتراك من قبل الإدارة فوراً',
+      };
     }
 
     if (!codesList.length) {
@@ -124,8 +136,8 @@ export async function validateLicenseOnline(
     if (!match) {
       return {
         isValid: false,
-        reason: 'not_found',
-        message: '❌ كود الترخيص غير موجود في قاعدة البيانات أو تم حذفه',
+        reason: 'revoked',
+        message: '🚫 تم تعطيل أو إلغاء صلاحية هذا الكود من قبل الإدارة (تم حذف الكود)',
       };
     }
 
@@ -186,6 +198,12 @@ export async function validateLicenseOnline(
       remainingHours = Math.max(0, Math.ceil(diffMs / (1000 * 60 * 60)));
     }
 
+    if (match.id) {
+      try {
+        localStorage.setItem('vip_active_id', String(match.id));
+      } catch {}
+    }
+
     return {
       isValid: true,
       reason: 'active',
@@ -194,6 +212,7 @@ export async function validateLicenseOnline(
       expiryDate: match.expiry_date,
       remainingHours,
       usedBy: match.used_by,
+      id: match.id,
     };
   } catch (err) {
     console.error('[LicenseManager] Verification error:', err);

@@ -214,8 +214,8 @@ async function startServer() {
         return res.json({
           isValid: false,
           valid: false,
-          reason: "not_found",
-          message: "❌ كود الترخيص غير مسجل في قاعدة البيانات",
+          reason: "revoked",
+          message: "🚫 تم تعطيل أو إلغاء صلاحية كود الترخيص من قبل الإدارة (تم حذف الكود)",
         });
       }
 

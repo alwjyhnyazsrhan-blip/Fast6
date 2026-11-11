@@ -1055,7 +1055,7 @@
     }
 
     async function deleteCode(id, code) {
-      if (!confirm(`هل أنت متأكد من حذف كود الاشتراك (${code}) نهائياً؟\n\nتنبيه: سيتم مسحه تماماً من قاعدة بيانات فايربيس والسيرفر ولن يعود للظهور مجدداً أبداً.`)) return;
+      if (!confirm(`هل أنت متأكد من حذف كود الاشتراك (${code}) نهائياً؟\n\nتنبيه: سيتم تعطيل التطبيق لدى السائق فوراً ومسحه تماماً من قاعدة بيانات فايربيس والسيرفر ولن يعود للظهور مجدداً أبداً.`)) return;
 
       // 1. تسجيل الكود ومعرفه في قائمة شواهد الحذف الدائمة لمنع أي استرجاع أو مزامنة تلقائية
       addDeletedTombstone(id);
@@ -1070,12 +1070,43 @@
       const q = getOfflineQueue().filter(item => item.id !== id && (!item.data || item.data.code !== code));
       setOfflineQueue(q);
 
-      showToast(`جاري حذف الكود (${code}) نهائياً...`);
+      showToast(`جاري تعطيل وحذف الكود (${code}) فوراً...`);
 
-      // 4. حذف مباشر وصريح من قاعدة بيانات فايربيس مع انتظار اكتمال العملية (await)
+      const cleanFirebase = getCleanFirebaseUrl();
+
+      // 4. خطوة التعطيل اللحظي الفائق (Fast Revoke Broadcast):
+      // إرسال إشعار فوري بحالة revoked إلى Firebase RTDB قبل الحذف
+      // لكي يتم بثه عبر SSE إلى جوال السائق في أقل من 50ms ويتعطل فوراً دون أي انتظار!
+      try {
+        const revokePayload = JSON.stringify({
+          status: 'revoked',
+          revoked_reason: 'deleted_by_admin',
+          last_status_change: Date.now()
+        });
+
+        await Promise.allSettled([
+          fetch(`${cleanFirebase}/activation_codes/${id}.json`, {
+            method: 'PATCH',
+            headers: { 'Content-Type': 'application/json' },
+            body: revokePayload
+          }),
+          code && code !== id ? fetch(`${cleanFirebase}/activation_codes/${code}.json`, {
+            method: 'PATCH',
+            headers: { 'Content-Type': 'application/json' },
+            body: revokePayload
+          }) : Promise.resolve(),
+          fetch(`${getServerBaseUrl()}/api/admin/subscriptions/${id}/revoke`, {
+            method: 'POST',
+            headers: getAdminHeaders()
+          })
+        ]);
+      } catch (revErr) {
+        console.warn('Fast revoke broadcast warning:', revErr);
+      }
+
+      // 5. حذف مباشر وصريح من قاعدة بيانات فايربيس مع انتظار اكتمال العملية (await)
       let fbOk = false;
       try {
-        const cleanFirebase = getCleanFirebaseUrl();
         const res = await fetch(`${cleanFirebase}/activation_codes/${id}.json`, {
           method: 'DELETE'
         });
@@ -1090,7 +1121,7 @@
         console.warn('Firebase direct delete warning:', fbErr);
       }
 
-      // 5. حذف الكود من ذاكرة السيرفر الخلفي أيضاً لضمان التزامن الكامل
+      // 6. حذف الكود من ذاكرة وقاعدة بيانات السيرفر الخلفي أيضاً لضمان التزامن الكامل
       try {
         await fetch(`${getServerBaseUrl()}/api/admin/subscriptions/${id}`, {
           method: 'DELETE',
@@ -1100,7 +1131,7 @@
         console.warn('Server delete notification warning:', srvErr);
       }
 
-      showToast(`✅ تم حذف الكود (${code}) نهائياً ولن يعود أبداً`);
+      showToast(`✅ تم تعطيل وحذف الكود (${code}) نهائياً`);
     }
 
     async function deleteAllCodes() {
@@ -1111,7 +1142,7 @@
       }
 
       const confirmed = confirm(
-        `⚠️ تحذير أمني هام:\n\nهل أنت متأكد من حذف جميع أكواد الاشتراك (${total} كود) نهائياً؟\n\n- سيتم مسحها تماماً وفوراً من قاعدة بيانات فايربيس السحابية.\n- سيتم مسحها من السيرفر.\n- لن يتمكن أي سائق من استخدامها وسيتم إغلاق التطبيق لديهم فوراً.\n- هذا الإجراء نهائي ولا يمكن التراجع عنه!`
+        `⚠️ تحذير أمني هام:\n\nهل أنت متأكد من حذف جميع أكواد الاشتراك (${total} كود) نهائياً؟\n\n- سيتم تعطيل التطبيق لدى جميع السائقين فوراً بأقصى سرعة.\n- سيتم مسحها تماماً وفوراً من قاعدة بيانات فايربيس والسيرفر.\n- هذا الإجراء نهائي ولا يمكن التراجع عنه!`
       );
       if (!confirmed) return;
 
@@ -1121,7 +1152,10 @@
         return;
       }
 
-      showToast(`جاري حذف جميع الأكواد (${total})...`);
+      showToast(`جاري تعطيل وحذف جميع الأكواد (${total})...`);
+
+      const currentCodesCopy = [...allCodes];
+      const cleanFirebase = getCleanFirebaseUrl();
 
       // 1. تسجيل كافة الأكواد الحالية في قائمة الشواهد المحذوفة (Tombstones) لمنع استعادتها
       allCodes.forEach(c => {
@@ -1129,17 +1163,37 @@
         if (c.id) addDeletedTombstone(c.id);
       });
 
-      // 2. تصفير القائمة محلياً فوراً وتحديث الشاشة والإحصائيات
+      // 2. بث أمر تعطيل فوري لكافة الأكواد قبل الحذف الفعلي حتى تتعطل على أجهزة السائقين فوراً (<50ms)
+      try {
+        const revokePayload = JSON.stringify({
+          status: 'revoked',
+          revoked_reason: 'bulk_deleted',
+          last_status_change: Date.now()
+        });
+
+        await Promise.allSettled(
+          currentCodesCopy.map(c => 
+            fetch(`${cleanFirebase}/activation_codes/${c.id}.json`, {
+              method: 'PATCH',
+              headers: { 'Content-Type': 'application/json' },
+              body: revokePayload
+            })
+          )
+        );
+      } catch (revErr) {
+        console.warn('Bulk revoke broadcast warning:', revErr);
+      }
+
+      // 3. تصفير القائمة محلياً فوراً وتحديث الشاشة والإحصائيات
       allCodes = [];
       setOfflineQueue([]);
       saveOfflineCache([]);
       calculateAndUpdateStats();
       renderCodesList();
 
-      // 3. حذف جميع الأكواد من قاعدة بيانات فايربيس مباشرة مع انتظار الاكتمال (await)
+      // 4. حذف جميع الأكواد من قاعدة بيانات فايربيس مباشرة مع انتظار الاكتمال (await)
       let fbOk = false;
       try {
-        const cleanFirebase = getCleanFirebaseUrl();
         const res = await fetch(`${cleanFirebase}/activation_codes.json`, {
           method: 'DELETE'
         });
@@ -1148,7 +1202,7 @@
         console.warn('Firebase bulk delete error:', err);
       }
 
-      // 4. حذف جميع الأكواد من السيرفر الخلفي أيضاً
+      // 5. حذف جميع الأكواد من السيرفر الخلفي أيضاً
       try {
         await fetch(`${getServerBaseUrl()}/api/admin/subscriptions`, {
           method: 'DELETE',
@@ -1158,7 +1212,7 @@
         console.warn('Server bulk delete error:', err);
       }
 
-      showToast(`✅ تم حذف جميع الأكواد (${total}) نهائياً من فايربيس والسيرفر بنجاح`);
+      showToast(`✅ تم تعطيل وحذف جميع الأكواد (${total}) نهائياً`);
     }
 
     // ----------------------------------------------------
