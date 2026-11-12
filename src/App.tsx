@@ -106,15 +106,33 @@ export default function App() {
   const [expiryDate, setExpiryDate] = useState<string>(initialDates.expDate);
   const [expiryIso, setExpiryIso] = useState<string>(initialDates.expIso);
   const [showAdvancedTools, setShowAdvancedTools] = useState<boolean>(false);
-  const [settings, setSettings] = useState<LocateGoSettings>({
-    maxDistanceKm: 3.0,
-    maxPickupDistanceKm: 1.5,
-    autoAccept: true,
-    soundAlerts: false,
-    vibrationFeedback: false,
-    swipeSpeedMs: 60,
-    tapIntervalMs: 10,
-    enableCustomInterval: false,
+  const [settings, setSettings] = useState<LocateGoSettings>(() => {
+    try {
+      const saved = localStorage.getItem('locatego_settings');
+      if (saved) {
+        const parsed = JSON.parse(saved);
+        return {
+          maxDistanceKm: typeof parsed.maxDistanceKm === 'number' && parsed.maxDistanceKm > 0 ? parsed.maxDistanceKm : 3.0,
+          maxPickupDistanceKm: typeof parsed.maxPickupDistanceKm === 'number' && parsed.maxPickupDistanceKm > 0 ? parsed.maxPickupDistanceKm : 1.5,
+          autoAccept: parsed.autoAccept ?? true,
+          soundAlerts: false,
+          vibrationFeedback: false,
+          swipeSpeedMs: parsed.swipeSpeedMs ?? 60,
+          tapIntervalMs: parsed.tapIntervalMs ?? 10,
+          enableCustomInterval: parsed.enableCustomInterval ?? false,
+        };
+      }
+    } catch {}
+    return {
+      maxDistanceKm: 3.0,
+      maxPickupDistanceKm: 1.5,
+      autoAccept: true,
+      soundAlerts: false,
+      vibrationFeedback: false,
+      swipeSpeedMs: 60,
+      tapIntervalMs: 10,
+      enableCustomInterval: false,
+    };
   });
 
   const [orders, setOrders] = useState<OrderItem[]>([]);
@@ -800,6 +818,9 @@ export default function App() {
   const handleUpdateMaxDistance = async (km: number) => {
     setSettings((prev) => {
       const updated = { ...prev, maxDistanceKm: km };
+      try {
+        localStorage.setItem('locatego_settings', JSON.stringify(updated));
+      } catch {}
       const bridge = getNativeBridge();
       if (bridge) {
         bridge.saveSettings(JSON.stringify(updated));
@@ -824,6 +845,9 @@ export default function App() {
   const handleUpdateMaxPickupDistance = async (km: number) => {
     setSettings((prev) => {
       const updated = { ...prev, maxPickupDistanceKm: km };
+      try {
+        localStorage.setItem('locatego_settings', JSON.stringify(updated));
+      } catch {}
       const bridge = getNativeBridge();
       if (bridge) {
         bridge.saveSettings(JSON.stringify(updated));
@@ -848,6 +872,9 @@ export default function App() {
   const handleUpdateSettings = async (newSettings: Partial<LocateGoSettings>) => {
     setSettings((prev) => {
       const updated = { ...prev, ...newSettings };
+      try {
+        localStorage.setItem('locatego_settings', JSON.stringify(updated));
+      } catch {}
       const bridge = getNativeBridge();
       if (bridge) {
         bridge.saveSettings(JSON.stringify(updated));

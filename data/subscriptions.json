@@ -1,6 +1,6 @@
 {
   "version": 1,
-  "updatedAt": "2026-11-11T20:06:12.901Z",
+  "updatedAt": "2026-11-12T12:50:42.475Z",
   "codes": {
     "21": {
       "id": "id_mw68sus5_yuls8z",
@@ -466,7 +466,7 @@
       "startMode": "on_first_activation",
       "createdAt": "2026-11-11T18:38:45.247Z",
       "activatedAt": "2026-11-11T18:38:52.542Z",
-      "expiryDate": "2026-12-11T18:38:45.247Z",
+      "expiryDate": "2026-12-11T20:16:50.893Z",
       "status": "revoked",
       "lastVerifiedAt": null
     },
@@ -2680,8 +2680,8 @@
       "startMode": "on_first_activation",
       "createdAt": "2026-10-13T01:58:05.042Z",
       "activatedAt": null,
-      "expiryDate": "2026-12-24T02:37:42.904Z",
-      "status": "used",
+      "expiryDate": "2026-11-23T20:27:57.598Z",
+      "status": "revoked",
       "lastVerifiedAt": null
     },
     "0548975514": {
@@ -4157,7 +4157,7 @@
       "createdAt": "2026-11-03T13:15:46.413Z",
       "activatedAt": null,
       "expiryDate": "2026-12-03T13:15:46.413Z",
-      "status": "used",
+      "status": "revoked",
       "lastVerifiedAt": null
     },
     "VIP-NBBUME": {
@@ -6849,7 +6849,7 @@
       "duration": "1_month",
       "durationDays": 30,
       "targetDeviceId": null,
-      "usedByDeviceId": null,
+      "usedByDeviceId": "200OA==",
       "driverName": "شكيب اشتراك تعويضي",
       "driverPhone": "0543850974",
       "notes": null,
@@ -6857,7 +6857,7 @@
       "createdAt": "2026-11-10T16:40:07.711Z",
       "activatedAt": "2026-11-10T16:40:07.711Z",
       "expiryDate": "2026-12-10T16:40:07.705Z",
-      "status": "active",
+      "status": "used",
       "lastVerifiedAt": null
     },
     "VIP-4RMJ-CFHH": {
@@ -7271,7 +7271,7 @@
       "createdAt": "2026-11-11T08:12:43.586Z",
       "activatedAt": "2026-11-11T08:16:51.122Z",
       "expiryDate": "2026-12-12T08:16:51.122Z",
-      "status": "used",
+      "status": "revoked",
       "lastVerifiedAt": null
     },
     "VIP-EPSA-TN5R": {
@@ -7630,7 +7630,7 @@
       "startMode": "from_now",
       "createdAt": "2026-11-11T16:34:23.055Z",
       "activatedAt": "2026-11-11T16:34:23.055Z",
-      "expiryDate": "2026-12-11T16:34:23.054Z",
+      "expiryDate": "2026-12-05T21:00:41.168Z",
       "status": "active",
       "lastVerifiedAt": null
     },
@@ -7648,7 +7648,7 @@
       "startMode": "from_now",
       "createdAt": "2026-11-11T16:34:44.442Z",
       "activatedAt": "2026-11-11T16:34:44.442Z",
-      "expiryDate": "2026-12-11T16:34:44.442Z",
+      "expiryDate": "2026-12-01T21:19:22.359Z",
       "status": "active",
       "lastVerifiedAt": null
     },
@@ -7666,8 +7666,8 @@
       "startMode": "from_now",
       "createdAt": "2026-11-11T16:38:46.892Z",
       "activatedAt": "2026-11-11T16:38:46.892Z",
-      "expiryDate": "2026-12-11T16:38:46.892Z",
-      "status": "used",
+      "expiryDate": "2026-12-01T21:06:06.697Z",
+      "status": "active",
       "lastVerifiedAt": null
     },
     "VIP-6ZK4-P8T2": {
@@ -7740,6 +7740,60 @@
       "activatedAt": null,
       "expiryDate": "2026-11-11T14:23:11.087Z",
       "status": "active",
+      "lastVerifiedAt": null
+    },
+    "0009": {
+      "id": "id_mwck9rb9_v3ixyx",
+      "code": "0009",
+      "planName": "مخصص",
+      "duration": "custom",
+      "durationDays": 30,
+      "targetDeviceId": null,
+      "usedByDeviceId": "REP-241901",
+      "driverName": null,
+      "driverPhone": null,
+      "notes": null,
+      "startMode": "on_first_activation",
+      "createdAt": "2026-11-11T20:18:06.595Z",
+      "activatedAt": "2026-11-11T20:18:08.030Z",
+      "expiryDate": "2026-12-11T20:18:06.593Z",
+      "status": "used",
+      "lastVerifiedAt": null
+    },
+    "0554047589": {
+      "id": "sub-1794429178605-980",
+      "code": "0554047589",
+      "planName": "12 يوم",
+      "duration": "custom_12_days",
+      "durationDays": 12,
+      "targetDeviceId": null,
+      "usedByDeviceId": "REP-98C53F",
+      "driverName": "رجب",
+      "driverPhone": null,
+      "notes": null,
+      "startMode": "on_first_activation",
+      "createdAt": "2026-11-11T20:32:58.605Z",
+      "activatedAt": "2026-11-11T20:33:50.450Z",
+      "expiryDate": "2026-11-23T20:33:50.450Z",
+      "status": "used",
+      "lastVerifiedAt": null
+    },
+    "VIP-BBR6-YAYB": {
+      "id": "sub-1794432610591-776",
+      "code": "VIP-BBR6-YAYB",
+      "planName": "21 يوم",
+      "duration": "custom_21_days",
+      "durationDays": 21,
+      "targetDeviceId": null,
+      "usedByDeviceId": "REP-B09FEF",
+      "driverName": null,
+      "driverPhone": null,
+      "notes": null,
+      "startMode": "on_first_activation",
+      "createdAt": "2026-11-11T21:30:10.591Z",
+      "activatedAt": "2026-11-11T21:32:24.218Z",
+      "expiryDate": "2026-12-02T21:32:24.218Z",
+      "status": "used",
       "lastVerifiedAt": null
     }
   },
