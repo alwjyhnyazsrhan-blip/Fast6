@@ -61,7 +61,7 @@ const DEFAULT_SETTINGS: DeviceSettings = {
   maxDistanceKm: 3.0,
   maxPickupDistanceKm: 1.5,
   autoAccept: true,
-  soundAlerts: false,
+  soundAlerts: true,
   minPayoutSar: 0.0,
   vibrationFeedback: false,
   swipeSpeedMs: 60,

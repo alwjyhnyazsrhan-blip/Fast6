@@ -154,15 +154,15 @@ export const Header: React.FC<HeaderProps> = ({
             </button>
           )}
 
-          {/* Sound Toggle (Silent Mode) */}
+          {/* Sound Toggle */}
           <button
             id="btn-sound-toggle"
             onClick={onToggleSound}
-            title={soundEnabled ? 'كتم التنبيهات الصوتية' : 'الوضع الصامت مفعل (بدون أي أصوات)'}
-            className={`p-2 rounded-lg border transition-all ${
+            title={soundEnabled ? 'كتم التنبيهات الصوتية' : 'تفعيل التنبيهات الصوتية (صامت حالياً)'}
+            className={`p-2 rounded-lg border transition-all cursor-pointer ${
               soundEnabled
-                ? 'bg-slate-800 text-emerald-400 border-slate-700 hover:bg-slate-700'
-                : 'bg-slate-900 text-slate-500 border-slate-800 hover:text-slate-400'
+                ? 'bg-emerald-950/60 text-emerald-400 border-emerald-500/40 hover:bg-emerald-900/60'
+                : 'bg-slate-900 text-slate-500 border-slate-800 hover:text-slate-300'
             }`}
           >
             {soundEnabled ? <Volume2 className="w-4 h-4" /> : <VolumeX className="w-4 h-4" />}

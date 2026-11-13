@@ -127,6 +127,7 @@ class LocateGoAccessibilityService : AccessibilityService() {
     @Volatile private var cachedMaxPickupKm: Double = 1.5  // الحد الأقصى لمسافة المطعم (الاستلام)
     @Volatile private var cachedMinPayoutSar: Double = 0.0
     @Volatile private var cachedAutoAccept: Boolean = true
+    @Volatile private var cachedSoundAlerts: Boolean = true
     @Volatile private var cachedSwipeSpeedMs: Long = 60L   // سرعة سحب فائقة السرعة (60ms)
     @Volatile private var cachedTapIntervalMs: Long = 10L  // فاصل النقرات المتتالية (ms)
     @Volatile private var cachedEnableCustomInterval: Boolean = false
@@ -193,6 +194,7 @@ class LocateGoAccessibilityService : AccessibilityService() {
         cachedMaxPickupKm = prefs.getFloat("max_pickup_distance_km", 1.5f).toDouble()
         cachedMinPayoutSar = prefs.getFloat("min_payout_sar", 0.0f).toDouble()
         cachedAutoAccept = prefs.getBoolean("auto_accept", true)
+        cachedSoundAlerts = prefs.getBoolean("sound_alerts", true)
         cachedSwipeSpeedMs = prefs.getInt("swipe_speed_ms", 60).toLong().coerceIn(40L, 500L)
         cachedTapIntervalMs = prefs.getInt("tap_interval_ms", 10).toLong()
         cachedEnableCustomInterval = prefs.getBoolean("enable_custom_interval", false)
@@ -204,6 +206,7 @@ class LocateGoAccessibilityService : AccessibilityService() {
                 "max_pickup_distance_km" -> cachedMaxPickupKm = sp.getFloat("max_pickup_distance_km", 1.5f).toDouble()
                 "min_payout_sar" -> cachedMinPayoutSar = sp.getFloat("min_payout_sar", 0.0f).toDouble()
                 "auto_accept" -> cachedAutoAccept = sp.getBoolean("auto_accept", true)
+                "sound_alerts" -> cachedSoundAlerts = sp.getBoolean("sound_alerts", true)
                 "swipe_speed_ms" -> cachedSwipeSpeedMs = sp.getInt("swipe_speed_ms", 60).toLong().coerceIn(40L, 500L)
                 "tap_interval_ms" -> cachedTapIntervalMs = sp.getInt("tap_interval_ms", 10).toLong()
                 "enable_custom_interval" -> cachedEnableCustomInterval = sp.getBoolean("enable_custom_interval", false)
@@ -775,11 +778,37 @@ class LocateGoAccessibilityService : AccessibilityService() {
     }
 
     private fun notifyDriverAcceptedAsync() {
-        // تم تعطيل كافة الأصوات والاهتزازات نهائياً (Silent & Vibration-Free Mode)
+        if (!cachedSoundAlerts) return
+        serviceScope.launch {
+            var toneGen: ToneGenerator? = null
+            try {
+                toneGen = ToneGenerator(AudioManager.STREAM_NOTIFICATION, 90)
+                toneGen.startTone(ToneGenerator.TONE_PROP_ACK, 220)
+                delay(280)
+            } catch (_: Exception) {
+            } finally {
+                try {
+                    toneGen?.release()
+                } catch (_: Exception) {}
+            }
+        }
     }
 
     private fun notifyDriverRejectedAsync() {
-        // تم تعطيل كافة الأصوات والاهتزازات نهائياً (Silent & Vibration-Free Mode)
+        if (!cachedSoundAlerts) return
+        serviceScope.launch {
+            var toneGen: ToneGenerator? = null
+            try {
+                toneGen = ToneGenerator(AudioManager.STREAM_NOTIFICATION, 75)
+                toneGen.startTone(ToneGenerator.TONE_PROP_NACK, 200)
+                delay(260)
+            } catch (_: Exception) {
+            } finally {
+                try {
+                    toneGen?.release()
+                } catch (_: Exception) {}
+            }
+        }
     }
 
     override fun onDestroy() {

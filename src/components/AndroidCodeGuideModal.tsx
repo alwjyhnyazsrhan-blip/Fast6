@@ -987,11 +987,35 @@ class LocateGoAccessibilityService : AccessibilityService() {
     }
 
     private fun notifyDriverAccepted() {
-        // تم تعطيل الأصوات والاهتزازات بالكامل (Silent & Vibration-Free)
+        val prefs = getSharedPreferences("locate_go_prefs", Context.MODE_PRIVATE)
+        if (!prefs.getBoolean("sound_alerts", true)) return
+        serviceScope.launch {
+            var toneGen: ToneGenerator? = null
+            try {
+                toneGen = ToneGenerator(AudioManager.STREAM_NOTIFICATION, 90)
+                toneGen.startTone(ToneGenerator.TONE_PROP_ACK, 220)
+                delay(280)
+            } catch (_: Exception) {
+            } finally {
+                try { toneGen?.release() } catch (_: Exception) {}
+            }
+        }
     }
 
     private fun notifyDriverRejected() {
-        // تم تعطيل الأصوات والاهتزازات بالكامل (Silent & Vibration-Free)
+        val prefs = getSharedPreferences("locate_go_prefs", Context.MODE_PRIVATE)
+        if (!prefs.getBoolean("sound_alerts", true)) return
+        serviceScope.launch {
+            var toneGen: ToneGenerator? = null
+            try {
+                toneGen = ToneGenerator(AudioManager.STREAM_NOTIFICATION, 75)
+                toneGen.startTone(ToneGenerator.TONE_PROP_NACK, 200)
+                delay(260)
+            } catch (_: Exception) {
+            } finally {
+                try { toneGen?.release() } catch (_: Exception) {}
+            }
+        }
     }
 
     override fun onDestroy() {

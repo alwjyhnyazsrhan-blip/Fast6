@@ -29,7 +29,7 @@ class LocateGoNativeBridge(private val activity: MainActivity) {
             put("maxDistanceKm", prefs.getFloat("max_distance_km", 3.0f).toDouble())
             put("maxPickupDistanceKm", prefs.getFloat("max_pickup_distance_km", 1.5f).toDouble())
             put("autoAccept", prefs.getBoolean("auto_accept", true))
-            put("soundAlerts", prefs.getBoolean("sound_alerts", false))
+            put("soundAlerts", prefs.getBoolean("sound_alerts", true))
             put("minPayoutSar", prefs.getFloat("min_payout_sar", 0.0f).toDouble())
             put("vibrationFeedback", prefs.getBoolean("vibration_feedback", false))
             put("swipeSpeedMs", prefs.getInt("swipe_speed_ms", 100))

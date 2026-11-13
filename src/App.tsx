@@ -106,6 +106,13 @@ export default function App() {
   const [expiryIso, setExpiryIso] = useState<string>(initialDates.expIso);
   const [showAdvancedTools, setShowAdvancedTools] = useState<boolean>(false);
   const [settings, setSettings] = useState<LocateGoSettings>(() => {
+    let soundPref: boolean = true;
+    try {
+      const explicitSound = localStorage.getItem('locatego_sound_enabled');
+      if (explicitSound === 'false') {
+        soundPref = false;
+      }
+    } catch {}
     try {
       const saved = localStorage.getItem('locatego_settings');
       if (saved) {
@@ -114,7 +121,7 @@ export default function App() {
           maxDistanceKm: typeof parsed.maxDistanceKm === 'number' && parsed.maxDistanceKm > 0 ? parsed.maxDistanceKm : 3.0,
           maxPickupDistanceKm: typeof parsed.maxPickupDistanceKm === 'number' && parsed.maxPickupDistanceKm > 0 ? parsed.maxPickupDistanceKm : 1.5,
           autoAccept: parsed.autoAccept ?? true,
-          soundAlerts: false,
+          soundAlerts: soundPref,
           vibrationFeedback: false,
           swipeSpeedMs: parsed.swipeSpeedMs ?? 60,
           tapIntervalMs: parsed.tapIntervalMs ?? 10,
@@ -126,7 +133,7 @@ export default function App() {
       maxDistanceKm: 3.0,
       maxPickupDistanceKm: 1.5,
       autoAccept: true,
-      soundAlerts: false,
+      soundAlerts: soundPref,
       vibrationFeedback: false,
       swipeSpeedMs: 60,
       tapIntervalMs: 10,
@@ -149,7 +156,13 @@ export default function App() {
     } catch {}
     return [];
   });
-  const [soundEnabled, setSoundEnabled] = useState<boolean>(false);
+  const [soundEnabled, setSoundEnabled] = useState<boolean>(() => {
+    try {
+      return localStorage.getItem('locatego_sound_enabled') !== 'false';
+    } catch {
+      return true;
+    }
+  });
   const [isLocating, setIsLocating] = useState<boolean>(false);
   const [isRefreshing, setIsRefreshing] = useState<boolean>(false);
   const [showAssistantModal, setShowAssistantModal] = useState<boolean>(false);
@@ -1135,7 +1148,17 @@ export default function App() {
       <Header
         status={status}
         soundEnabled={soundEnabled}
-        onToggleSound={() => setSoundEnabled(!soundEnabled)}
+        onToggleSound={() => {
+          const nextSound = !soundEnabled;
+          setSoundEnabled(nextSound);
+          try {
+            localStorage.setItem('locatego_sound_enabled', String(nextSound));
+          } catch {}
+          handleUpdateSettings({ soundAlerts: nextSound });
+          if (nextSound) {
+            soundManager.playStart();
+          }
+        }}
         onRefreshServer={handleRefreshServerOrders}
         isRefreshing={isRefreshing}
         vipCode={vipCode}
