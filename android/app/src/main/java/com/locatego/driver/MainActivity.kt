@@ -15,6 +15,7 @@ import android.os.PowerManager
 import android.provider.Settings
 import android.util.Log
 import android.view.KeyEvent
+import java.io.ByteArrayInputStream
 import android.view.View
 import android.webkit.*
 import android.widget.FrameLayout
@@ -156,6 +157,89 @@ class MainActivity : AppCompatActivity() {
         webView.addJavascriptInterface(bridge, "LocateGoNative")
 
         webView.webViewClient = object : WebViewClient() {
+            override fun shouldInterceptRequest(
+                view: WebView?,
+                request: WebResourceRequest?
+            ): WebResourceResponse? {
+                val uri = request?.url ?: return super.shouldInterceptRequest(view, request)
+                val host = uri.host?.lowercase() ?: ""
+                if (host == "locatego.local") {
+                    var reqPath = (uri.path ?: "/").trimStart('/')
+                    if (reqPath.isEmpty()) reqPath = "index.html"
+
+                    // استجابة فورية لطلبات /api/* في وضع الاستقلالية التامة (بدون سيرفر أو استضافة)
+                    if (reqPath.startsWith("api/")) {
+                        val json = """{"standalone":true,"mode":"zero-hosting"}""".toByteArray(Charsets.UTF_8)
+                        return WebResourceResponse(
+                            "application/json",
+                            "UTF-8",
+                            404,
+                            "Standalone Mode",
+                            mapOf("Access-Control-Allow-Origin" to "*"),
+                            ByteArrayInputStream(json)
+                        )
+                    }
+
+                    // منع تصفح ملفات الإدارة داخل تطبيق المندوب وحماية المسارات
+                    if (reqPath.contains("..") || reqPath.contains("admin-portal", ignoreCase = true) || reqPath.endsWith(".cjs")) {
+                        return WebResourceResponse(
+                            "text/plain",
+                            "UTF-8",
+                            404,
+                            "Not Found",
+                            mapOf("Access-Control-Allow-Origin" to "*"),
+                            ByteArrayInputStream(ByteArray(0))
+                        )
+                    }
+
+                    val mimeType = when {
+                        reqPath.endsWith(".html", true) -> "text/html"
+                        reqPath.endsWith(".js", true) || reqPath.endsWith(".mjs", true) -> "application/javascript"
+                        reqPath.endsWith(".css", true) -> "text/css"
+                        reqPath.endsWith(".json", true) -> "application/json"
+                        reqPath.endsWith(".svg", true) -> "image/svg+xml"
+                        reqPath.endsWith(".png", true) -> "image/png"
+                        reqPath.endsWith(".jpg", true) || reqPath.endsWith(".jpeg", true) -> "image/jpeg"
+                        reqPath.endsWith(".webp", true) -> "image/webp"
+                        reqPath.endsWith(".woff2", true) -> "font/woff2"
+                        reqPath.endsWith(".woff", true) -> "font/woff"
+                        reqPath.endsWith(".ttf", true) -> "font/ttf"
+                        else -> "application/octet-stream"
+                    }
+
+                    return try {
+                        val inputStream = assets.open(reqPath)
+                        WebResourceResponse(
+                            mimeType,
+                            "UTF-8",
+                            200,
+                            "OK",
+                            mapOf(
+                                "Access-Control-Allow-Origin" to "*",
+                                "Cache-Control" to "no-cache"
+                            ),
+                            inputStream
+                        )
+                    } catch (_: Exception) {
+                        // SPA fallback to index.html for unknown routes
+                        try {
+                            val fallbackStream = assets.open("index.html")
+                            WebResourceResponse(
+                                "text/html",
+                                "UTF-8",
+                                200,
+                                "OK",
+                                mapOf("Access-Control-Allow-Origin" to "*"),
+                                fallbackStream
+                            )
+                        } catch (_: Exception) {
+                            null
+                        }
+                    }
+                }
+                return super.shouldInterceptRequest(view, request)
+            }
+
             override fun shouldOverrideUrlLoading(view: WebView?, request: WebResourceRequest?): Boolean {
                 val url = request?.url?.toString() ?: ""
                 if (url.startsWith("vip://unlock")) {
@@ -240,6 +324,15 @@ class MainActivity : AppCompatActivity() {
                 super.onReceivedError(view, request, error)
                 if (request?.isForMainFrame == true) {
                     progressBar.visibility = View.GONE
+                    // 🚀 في حال تعذر السيرفر الخارجي أو انتهاء الاستضافة: التحويل التلقائي للواجهة المدمجة محلياً
+                    val currentUrl = request.url?.toString() ?: ""
+                    if (!currentUrl.startsWith("https://locatego.local")) {
+                        try {
+                            assets.open("index.html").close()
+                            Log.w("MainActivity", "⚠️ التحويل التلقائي للوضع المستقل بدون استضافة")
+                            view?.loadUrl("https://locatego.local/index.html")
+                        } catch (_: Exception) {}
+                    }
                 }
             }
         }
@@ -254,9 +347,24 @@ class MainActivity : AppCompatActivity() {
             }
         }
 
-        // تحميل واجهة لوحة التحكم من سيرفر Render المباشر
-        val dashboardUrl = renderClient.baseUrl
-        webView.loadUrl(dashboardUrl)
+        // 🚀 معمارية التشغيل المستقل بدون استضافة (Zero-Hosting Standalone Mode):
+        // تحميل الواجهة المدمجة من داخل الـ APK عبر https://locatego.local/index.html
+        // يعمل 100% للأبد بدون الحاجة لأي استضافة أو منصة مدفوعة وبدون أي قيود CORS!
+        val hasLocalAssets = try {
+            assets.open("index.html").close()
+            true
+        } catch (_: Exception) {
+            false
+        }
+
+        if (hasLocalAssets) {
+            Log.i("MainActivity", "🚀 تشغيل التطبيق بالوضع المستقل بدون استضافة: https://locatego.local/index.html")
+            webView.loadUrl("https://locatego.local/index.html")
+        } else {
+            val dashboardUrl = renderClient.baseUrl
+            Log.i("MainActivity", "🌐 فتح رابط السيرفر الخارجي: $dashboardUrl")
+            webView.loadUrl(dashboardUrl)
+        }
     }
 
     /**

@@ -8,9 +8,7 @@ import {
   Smartphone, 
   LayoutDashboard, 
   RefreshCw, 
-  Wifi, 
-  WifiOff,
-  Key
+  Wifi
 } from 'lucide-react';
 import { LocateGoStatus } from '../types';
 
@@ -25,7 +23,6 @@ interface HeaderProps {
   currentDeviceId?: string;
   lastHeartbeatAt?: number | null;
   remainingHours?: number | null;
-  onOpenCreateCode?: () => void;
 }
 
 export const Header: React.FC<HeaderProps> = ({
@@ -39,7 +36,6 @@ export const Header: React.FC<HeaderProps> = ({
   currentDeviceId,
   lastHeartbeatAt,
   remainingHours,
-  onOpenCreateCode,
 }) => {
   return (
     <header className="sticky top-0 z-40 bg-[#0c1220]/90 backdrop-blur-md border-b border-slate-800/80 px-4 py-3 sm:px-6">
@@ -72,14 +68,14 @@ export const Header: React.FC<HeaderProps> = ({
                   Firebase Cloud
                 </span>
                 {status.serverConnected ? (
-                  <span className="flex items-center gap-1 text-[11px] text-emerald-400 bg-emerald-950/50 px-2 py-0.5 rounded-full border border-emerald-500/30">
+                  <span className="flex items-center gap-1 text-[11px] text-emerald-400 bg-emerald-950/50 px-2 py-0.5 rounded-full border border-emerald-500/30" title="السيرفر الخارجي متصل">
                     <Wifi className="w-3 h-3 text-emerald-400" />
-                    النظام متصل
+                    السيرفر متصل
                   </span>
                 ) : (
-                  <span className="flex items-center gap-1 text-[11px] text-amber-400 bg-amber-950/50 px-2 py-0.5 rounded-full border border-amber-500/30">
-                    <WifiOff className="w-3 h-3 text-amber-400" />
-                    محلي
+                  <span className="flex items-center gap-1 text-[11px] text-emerald-300 bg-emerald-950/60 px-2.5 py-0.5 rounded-full border border-emerald-500/40 font-medium shadow-sm" title="التطبيق يعمل بوضع الاستقلالية التامة 100% محلياً على هاتفك بدون الحاجة لأي سيرفر أو استضافة مدفوعة">
+                    <span className="w-1.5 h-1.5 rounded-full bg-emerald-400 animate-pulse"></span>
+                    مستقل (بدون استضافة) ⚡
                   </span>
                 )}
                 {currentDeviceId && (
@@ -113,33 +109,6 @@ export const Header: React.FC<HeaderProps> = ({
 
         {/* Global Controls & Action trigger */}
         <div className="flex items-center justify-end gap-2 flex-wrap">
-          {/* Create Code with Custom Days Button */}
-          {onOpenCreateCode && (
-            <button
-              id="btn-header-create-code"
-              onClick={onOpenCreateCode}
-              title="إنشاء كود اشتراك جديد بأي عدد أيام مخصص"
-              className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-xs font-bold transition-all border bg-emerald-950/70 hover:bg-emerald-900 text-emerald-300 border-emerald-500/40 shadow-sm cursor-pointer active:scale-95"
-            >
-              <Key className="w-3.5 h-3.5 text-emerald-400 stroke-[2.5]" />
-              <span className="hidden sm:inline">إنشاء كود بالأيام</span>
-              <span className="sm:hidden">كود</span>
-            </button>
-          )}
-
-          {/* Admin Portal Direct Link */}
-          <a
-            id="btn-header-admin-portal"
-            href="/admin-portal.html"
-            target="_blank"
-            rel="noopener noreferrer"
-            title="فتح لوحة تحكم المشرف الكاملة لإدارة الأكواد وتصديرها"
-            className="flex items-center gap-1.5 px-2.5 py-1.5 rounded-lg text-xs font-semibold transition-all border bg-slate-800/90 hover:bg-cyan-950/70 text-cyan-300 border-slate-700 hover:border-cyan-500/40 shadow-sm cursor-pointer active:scale-95"
-          >
-            <ShieldCheck className="w-3.5 h-3.5 text-cyan-400" />
-            <span className="hidden md:inline">لوحة المشرف</span>
-          </a>
-
           {/* Real Server Sync Button */}
           <button
             id="btn-refresh-server"

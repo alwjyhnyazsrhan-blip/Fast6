@@ -138,7 +138,7 @@ export const VipLockScreen: React.FC<VipLockScreenProps> = ({
     checkSaved();
   }, [initialError]);
 
-  // فحص تلقائي سريع (كل 3 ثوانٍ) لإعادة فتح التطبيق فوراً بمجرد تنشيط الكود من المشرف
+  // فحص تلقائي سريع (كل 5 ثوانٍ) لإعادة فتح التطبيق فوراً بمجرد تنشيط الكود من المشرف (سيرفر أو فايربيس مباشرة)
   useEffect(() => {
     const savedCode = localStorage.getItem('vip_active_code');
     if (!savedCode) return;
@@ -153,10 +153,43 @@ export const VipLockScreen: React.FC<VipLockScreenProps> = ({
             localStorage.removeItem('vip_termination_notice');
             setErrorMessage('');
             onUnlock(savedCode, data.planName, data.expiryDate);
+            return;
           }
         }
       } catch {}
-    }, 3000);
+
+      // فحص مباشر من فايربيس بدون الحاجة لأي استضافة
+      try {
+        const cleanO0 = (s: string) => s.replace(/O/g, '0');
+        const upperSaved = savedCode.trim().toUpperCase();
+        const fbRes = await fetch('https://appprotector-79e9c-default-rtdb.firebaseio.com/activation_codes.json');
+        if (fbRes.ok) {
+          const fbData = await fbRes.json();
+          if (fbData && typeof fbData === 'object') {
+            const list: any[] = Object.values(fbData);
+            const match =
+              list.find((c: any) => (c?.code || '').toString().trim().toUpperCase() === upperSaved) ||
+              list.find((c: any) => cleanO0((c?.code || '').toString().trim().toUpperCase()) === cleanO0(upperSaved));
+            if (match) {
+              const status = (match.status || '').toLowerCase();
+              const isRevoked = status === 'revoked' || status === 'disabled' || status === 'banned' || status === 'cancelled' || status === 'expired';
+              const exp = match.expiry_date || match.expiryDate;
+              const isExpired = exp ? Date.now() > new Date(exp).getTime() + 5 * 60 * 1000 : false;
+              const targetDev = match.target_device_id || match.targetDeviceId || match.used_by || match.usedByDeviceId;
+              const devOk = !targetDev || targetDev.trim() === '' || isAuthorizedDevice(targetDev, deviceId);
+              if (!isRevoked && !isExpired && devOk) {
+                const days = Number(match.duration_days || match.durationDays || 30);
+                const plan = match.plan_name || match.planName || (days === 1 ? 'تجربة يوم' : (days <= 10 ? `${days} أيام` : `${days} يوم`));
+                const expiry = exp || new Date(Date.now() + days * 86400 * 1000).toISOString();
+                localStorage.removeItem('vip_termination_notice');
+                setErrorMessage('');
+                onUnlock(match.code || upperSaved, plan, expiry);
+              }
+            }
+          }
+        }
+      } catch {}
+    }, 5000);
 
     return () => clearInterval(autoReactivateInterval);
   }, [deviceId, onUnlock]);
@@ -335,15 +368,20 @@ export const VipLockScreen: React.FC<VipLockScreenProps> = ({
         console.warn('[VipLockScreen] Server verify endpoint bypassed, falling back to database query:', serverErr);
       }
 
-      // 3. الفحص الاحتياطي المباشر من قاعدة بيانات Firebase RTDB
+      // 3. الفحص المباشر من قاعدة بيانات Firebase RTDB (يعمل 100% بدون أي استضافة أو سيرفر)
       try {
+        const cleanO0 = (s: string) => s.replace(/O/g, '0');
         const directRes = await fetch('https://appprotector-79e9c-default-rtdb.firebaseio.com/activation_codes.json');
         if (directRes.ok) {
           const directData = await directRes.json();
           if (directData && typeof directData === 'object') {
-            const list: any[] = Object.values(directData);
-            const match = list.find((c: any) => (c?.code || '').toString().trim().toUpperCase() === cleanCode);
-            if (match) {
+            const entries: [string, any][] = Object.entries(directData);
+            const foundEntry =
+              entries.find(([, c]: [string, any]) => (c?.code || '').toString().trim().toUpperCase() === cleanCode) ||
+              entries.find(([, c]: [string, any]) => cleanO0((c?.code || '').toString().trim().toUpperCase()) === cleanO0(cleanCode));
+
+            if (foundEntry) {
+              const [fbKey, match] = foundEntry;
               const status = (match.status || '').toLowerCase();
               if (status === 'revoked' || status === 'disabled' || status === 'banned' || status === 'cancelled') {
                 if (!isSilent) setErrorMessage(currentLang === 'ar' ? '🚫 تم تعطيل أو إلغاء صلاحية هذا الكود من قبل الإدارة' : 'This code has been revoked');
@@ -359,6 +397,17 @@ export const VipLockScreen: React.FC<VipLockScreenProps> = ({
                 return false;
               }
 
+              const existingExpiry = match.expiry_date || match.expiryDate;
+              if (existingExpiry) {
+                const expMs = new Date(existingExpiry).getTime();
+                if (!isNaN(expMs) && Date.now() > expMs + 5 * 60 * 1000) {
+                  if (!isSilent) setErrorMessage(currentLang === 'ar' ? '⏰ انتهت صلاحية هذا الكود' : 'This code has expired');
+                  setIsLoading(false);
+                  setIsInitialChecking(false);
+                  return false;
+                }
+              }
+
               const targetDev = match.target_device_id || match.targetDeviceId || match.used_by || match.usedByDeviceId;
               if (targetDev && targetDev.trim() !== '' && !isAuthorizedDevice(targetDev, deviceId)) {
                 if (!isSilent) setErrorMessage(currentLang === 'ar' ? `⚠️ كود الاشتراك مخصص لجهاز آخر (${targetDev})` : 'Code is locked to another device');
@@ -369,13 +418,31 @@ export const VipLockScreen: React.FC<VipLockScreenProps> = ({
 
               const nowIso = new Date().toISOString();
               const days = Number(match.duration_days || match.durationDays || currentPlan.days || 30);
-              const expiry = match.expiry_date || match.expiryDate || new Date(Date.now() + days * 24 * 3600 * 1000).toISOString();
+              const expiry = existingExpiry || new Date(Date.now() + days * 24 * 3600 * 1000).toISOString();
               const plan = match.plan_name || match.planName || (days === 1 ? 'تجربة يوم' : (days <= 10 ? `${days} أيام` : `${days} يوم`));
-              localStorage.setItem('vip_active_code', cleanCode);
-              if (match.id) localStorage.setItem('vip_active_id', String(match.id));
+              const resolvedCode = (match.code || cleanCode).toString().trim().toUpperCase();
+
+              // تسجيل أول تفعيل وربط الجهاز مباشرة في Firebase RTDB بدون الحاجة لأي استضافة
+              if (status === 'new' || !match.used_by || !existingExpiry) {
+                const patchKey = match.id || fbKey;
+                fetch(`https://appprotector-79e9c-default-rtdb.firebaseio.com/activation_codes/${encodeURIComponent(patchKey)}.json`, {
+                  method: 'PATCH',
+                  headers: { 'Content-Type': 'application/json' },
+                  body: JSON.stringify({
+                    status: 'used',
+                    used_by: match.used_by || deviceId,
+                    used_count: Number(match.used_count || 0) + (status === 'new' ? 1 : 0),
+                    activated_at: match.activated_at || nowIso,
+                    expiry_date: expiry,
+                  }),
+                }).catch(() => {});
+              }
+
+              localStorage.setItem('vip_active_code', resolvedCode);
+              if (match.id || fbKey) localStorage.setItem('vip_active_id', String(match.id || fbKey));
               localStorage.setItem('vip_device_id', deviceId);
               localStorage.setItem('vip_plan_name', plan);
-              localStorage.setItem('vip_activated_at', nowIso);
+              localStorage.setItem('vip_activated_at', match.activated_at || nowIso);
               localStorage.setItem('vip_expiry_date', expiry);
               localStorage.removeItem('vip_termination_notice');
 
@@ -384,7 +451,7 @@ export const VipLockScreen: React.FC<VipLockScreenProps> = ({
                 bridge.setVipLicensed(true);
               }
 
-              onUnlock(cleanCode, plan, expiry);
+              onUnlock(resolvedCode, plan, expiry);
               setIsLoading(false);
               setIsInitialChecking(false);
               return true;

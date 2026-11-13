@@ -70,12 +70,21 @@ class RenderApiClient(private val context: Context) {
         }
 
     private val httpClient = OkHttpClient.Builder()
-        .connectionPool(ConnectionPool(8, 5, TimeUnit.MINUTES))
-        .connectTimeout(25, TimeUnit.SECONDS)
-        .readTimeout(25, TimeUnit.SECONDS)
-        .writeTimeout(25, TimeUnit.SECONDS)
-        .retryOnConnectionFailure(true)
+        .connectionPool(ConnectionPool(4, 2, TimeUnit.MINUTES))
+        .connectTimeout(4, TimeUnit.SECONDS)
+        .readTimeout(4, TimeUnit.SECONDS)
+        .writeTimeout(4, TimeUnit.SECONDS)
+        .retryOnConnectionFailure(false)
         .build()
+
+    private fun isBundledStandaloneMode(): Boolean {
+        return try {
+            context.assets.open("index.html").close()
+            true
+        } catch (_: Exception) {
+            false
+        }
+    }
 
     data class EvaluationResponse(
         val isAccepted: Boolean,
@@ -150,6 +159,19 @@ class RenderApiClient(private val context: Context) {
         pickupDistanceKm: Double? = null,
         deliveryDistanceKm: Double? = null
     ): Result<EvaluationResponse> = withContext(Dispatchers.IO) {
+        if (isBundledStandaloneMode()) {
+            val maxDelivery = prefs.getFloat("max_distance_km", 3.0f).toDouble()
+            val evalDist = deliveryDistanceKm ?: distanceKm
+            return@withContext Result.success(
+                EvaluationResponse(
+                    isAccepted = evalDist <= maxDelivery,
+                    decision = if (evalDist <= maxDelivery) "accepted" else "rejected",
+                    computedDistanceKm = evalDist,
+                    maxAllowedKm = maxDelivery,
+                    rejectionReason = null
+                )
+            )
+        }
         try {
             val url = baseUrl.trim().removeSuffix("/")
             val json = JSONObject().apply {
@@ -226,6 +248,9 @@ class RenderApiClient(private val context: Context) {
      * تحديث إحداثيات موقع المندوب الحالية في الخادم
      */
     suspend fun updateDriverLocation(lat: Double, lng: Double): Boolean = withContext(Dispatchers.IO) {
+        if (isBundledStandaloneMode()) {
+            return@withContext true
+        }
         try {
             val url = baseUrl.trim().removeSuffix("/")
             val json = JSONObject().apply {

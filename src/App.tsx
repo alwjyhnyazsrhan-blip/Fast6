@@ -9,7 +9,6 @@ import { SecurityShieldBadge } from './components/SecurityShieldBadge';
 import { LocateAssistantModal } from './components/LocateAssistantModal';
 import { LocateHelperDashboard } from './components/LocateHelperDashboard';
 import { AccessibilityPromptBanner } from './components/AccessibilityPromptBanner';
-import { CreateSubscriptionModal } from './components/CreateSubscriptionModal';
 import { Language } from './utils/i18n';
 import { Radio, ChevronDown, ChevronUp } from 'lucide-react';
 import { LocateGoSettings, LocateGoStatus, OrderItem, AppSource } from './types';
@@ -135,12 +134,25 @@ export default function App() {
     };
   });
 
-  const [orders, setOrders] = useState<OrderItem[]>([]);
+  const [orders, setOrders] = useState<OrderItem[]>(() => {
+    try {
+      const saved = localStorage.getItem('locatego_recent_orders');
+      if (saved) {
+        const parsed = JSON.parse(saved);
+        if (Array.isArray(parsed)) {
+          return parsed.map((o: any) => ({
+            ...o,
+            detectedAt: new Date(o.detectedAt || Date.now()),
+          }));
+        }
+      }
+    } catch {}
+    return [];
+  });
   const [soundEnabled, setSoundEnabled] = useState<boolean>(false);
   const [isLocating, setIsLocating] = useState<boolean>(false);
   const [isRefreshing, setIsRefreshing] = useState<boolean>(false);
   const [showAssistantModal, setShowAssistantModal] = useState<boolean>(false);
-  const [showCreateCodeModal, setShowCreateCodeModal] = useState<boolean>(false);
 
   // VIP Access Lock Screen State: يُفتح فقط إذا كان الكود محفوظاً وسارياً ولم يصدر بشأنه أمر إيقاف
   const [isVipUnlocked, setIsVipUnlocked] = useState<boolean>(() => {
@@ -192,6 +204,9 @@ export default function App() {
         if (typeof bridge.setVipLicensed === 'function') {
           bridge.setVipLicensed(hasValidLicense);
         }
+        if (typeof bridge.saveSettings === 'function') {
+          bridge.saveSettings(JSON.stringify(settings));
+        }
       } catch {}
     }
   }, []);
@@ -233,19 +248,25 @@ export default function App() {
     };
   }, []);
 
-  const [status, setStatus] = useState<LocateGoStatus>({
-    deviceId: getActiveDeviceId(),
-    isRunning: false,
-    isOverlayActive: false,
-    isMonitoringScreen: false,
-    fps: 0,
-    latencyMs: 0,
-    lastScanTimestamp: Date.now(),
-    totalScanned: 0,
-    acceptedCount: 0,
-    rejectedCount: 0,
-    serverConnected: false,
-    driverLocation: null,
+  const [status, setStatus] = useState<LocateGoStatus>(() => {
+    let savedIsRunning = false;
+    try {
+      savedIsRunning = localStorage.getItem('locatego_is_running') === 'true';
+    } catch {}
+    return {
+      deviceId: getActiveDeviceId(),
+      isRunning: savedIsRunning,
+      isOverlayActive: false,
+      isMonitoringScreen: savedIsRunning,
+      fps: 0,
+      latencyMs: 0,
+      lastScanTimestamp: Date.now(),
+      totalScanned: 0,
+      acceptedCount: 0,
+      rejectedCount: 0,
+      serverConnected: false,
+      driverLocation: null,
+    };
   });
 
   // Listen for device changed events
@@ -754,6 +775,9 @@ export default function App() {
       acceptedCount: orders.filter((o) => o.status === 'accepted').length,
       rejectedCount: orders.filter((o) => o.status === 'rejected').length,
     }));
+    try {
+      localStorage.setItem('locatego_recent_orders', JSON.stringify(orders.slice(0, 50)));
+    } catch {}
   }, [orders]);
 
   // ----------------------------------------------------
@@ -771,15 +795,24 @@ export default function App() {
       }
     }
 
+    try {
+      localStorage.setItem('locatego_is_running', String(nextRunning));
+    } catch {}
+
     setStatus((prev) => ({
       ...prev,
       isRunning: nextRunning,
       isMonitoringScreen: nextRunning,
     }));
 
-    // If running in Android App, notify native layer
+    // If running in Android App, notify native layer & sync latest distance limits
     const bridge = getNativeBridge();
     if (bridge) {
+      try {
+        if (nextRunning && typeof bridge.saveSettings === 'function') {
+          bridge.saveSettings(JSON.stringify({ ...settings, autoAccept: true }));
+        }
+      } catch {}
       bridge.setTrackingActive(nextRunning);
     }
 
@@ -795,7 +828,7 @@ export default function App() {
     } catch {
       // Local state already updated
     }
-  }, [status.isRunning, soundEnabled, deviceId]);
+  }, [status.isRunning, soundEnabled, deviceId, settings]);
 
   // Keyboard shortcut: Spacebar toggles start/stop
   useEffect(() => {
@@ -1020,6 +1053,9 @@ export default function App() {
   const handleClearOrders = async () => {
     setOrders([]);
     try {
+      localStorage.removeItem('locatego_recent_orders');
+    } catch {}
+    try {
       await fetch(`/api/orders?deviceId=${encodeURIComponent(deviceId)}`, {
         method: 'DELETE',
         headers: { 'X-Device-Id': deviceId },
@@ -1049,7 +1085,11 @@ export default function App() {
           setVipCode(code);
           const effectivePlan = planName || 'تجربة يوم';
           setActivePlanName(effectivePlan);
-          const is1DayTrial = effectivePlan.includes('يوم') && !effectivePlan.includes('3') && !effectivePlan.includes('شهر');
+          const is1DayTrial =
+            effectivePlan.includes('تجربة يوم') ||
+            effectivePlan === '1 day' ||
+            effectivePlan === 'يوم واحد' ||
+            effectivePlan === '1 يوم';
           
           const now = new Date();
           const effectiveActivatedAt = now.toISOString();
@@ -1102,7 +1142,6 @@ export default function App() {
         currentDeviceId={deviceId}
         lastHeartbeatAt={lastHeartbeatAt}
         remainingHours={remainingHours}
-        onOpenCreateCode={() => setShowCreateCodeModal(true)}
         onRelock={() => {
           handleEmergencyTermination('user_relock', currentLang === 'ar' ? 'تم قفل التطبيق يدوياً والعودة لشاشة الدخول' : 'Application locked manually');
         }}
@@ -1237,13 +1276,6 @@ export default function App() {
           </div>
         </div>
       )}
-
-      {/* Modal 2: In-App Create Subscription Code by Days Modal */}
-      <CreateSubscriptionModal
-        isOpen={showCreateCodeModal}
-        onClose={() => setShowCreateCodeModal(false)}
-        currentDeviceId={deviceId}
-      />
 
       {/* Persistent Night-Mode Driver Footer */}
       <footer className="mt-auto border-t border-slate-800/80 bg-[#080c14] py-4 px-6 text-center text-xs text-slate-400">

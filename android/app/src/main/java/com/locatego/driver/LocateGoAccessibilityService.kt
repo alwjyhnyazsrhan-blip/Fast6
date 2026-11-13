@@ -334,25 +334,24 @@ class LocateGoAccessibilityService : AccessibilityService() {
         if (processedOrdersCache[deduplicationKey]?.let { now - it < 250 } == true) return
 
         // =========================================================================
-        // القواعد الصارمة والقطعية للموافقة على الطلب:
-        // 1. مسافة العميل يجب أن تكون <= الحد الأقصى لمسافة العميل (مثلاً 3.0 كم)
-        // 2. مسافة المطعم يجب أن تكون <= الحد الأقصى لمسافة المطعم (مثلاً 1.5 كم)
-        // (تم استبعاد السعر تماماً من معايير القبول أو الرفض: الاعتماد حصرياً على المسافات الجغرافية)
+        // القواعد الصارمة والقطعية للموافقة على الطلب (المعيار الأساسي الوحيد 100%):
+        // 1. إذا لم يُعثر على أي مسافة رقمية واضحة في الشاشة -> لا تقبل أبداً!
+        // 2. إذا كانت أي مسافة موجودة على الشاشة تتجاوز الحد الأقصى للعميل -> ارفض فوراً!
+        // 3. مسافة العميل <= الحد الأقصى المحدد (الافتراضي: 3.0 كم)
+        // 4. مسافة المتجر <= حد مسافة المتجر (الافتراضي: 1.5 كم)
         // =========================================================================
-        val isDeliveryWithinLimit = when {
-            deliveryDistKm != null -> deliveryDistKm <= maxAllowedDelivery
-            allDists.isNotEmpty() -> allDists.any { it <= maxAllowedDelivery }
-            else -> true
-        }
+        val hasAnyDistance = allDists.isNotEmpty() || deliveryDistKm != null || pickupDistKm != null
+        val maxSeenDistance = allDists.maxOrNull() ?: deliveryDistKm ?: pickupDistKm
+        val anyDistanceExceedsDeliveryLimit = maxSeenDistance != null && maxSeenDistance > maxAllowedDelivery
 
-        val isPickupWithinLimit = when {
-            pickupDistKm != null -> pickupDistKm <= maxAllowedPickup
-            allDists.size >= 2 -> allDists.minOrNull()?.let { it <= maxAllowedPickup } ?: true
-            else -> true
-        }
+        val evalDeliveryKm = deliveryDistKm ?: allDists.maxOrNull()
+        val evalPickupKm = pickupDistKm ?: (if (allDists.size >= 2) allDists.minOrNull() else null)
 
-        // استبعاد السعر تماماً: القرار يعتمد فقط على المسافات الجغرافية
-        val isOrderMatching = isDeliveryWithinLimit && isPickupWithinLimit
+        val isDeliveryWithinLimit = evalDeliveryKm != null && evalDeliveryKm <= maxAllowedDelivery && !anyDistanceExceedsDeliveryLimit
+        val isPickupWithinLimit = evalPickupKm == null || evalPickupKm <= maxAllowedPickup
+
+        // استبعاد السعر تماماً: القرار يعتمد فقط 100% على تحقق المسافات الجغرافية
+        val isOrderMatching = hasAnyDistance && isDeliveryWithinLimit && isPickupWithinLimit
 
         val lowerPkg = packageName.lowercase()
         val resolvedAppName = when {
@@ -386,30 +385,36 @@ class LocateGoAccessibilityService : AccessibilityService() {
 
             Log.i(
                 "LocateGoService",
-                "⚡⚡ ZERO-DELAY AUTO-ACCEPT SUCCESS! [Triggered=$swipeSuccess] App='$resolvedAppName' Store='$storeName' | Pickup: ${pickupDistKm ?: "N/A"} km (limit $maxAllowedPickup) | Delivery: ${deliveryDistKm ?: targetEvaluationDistanceKm} km (limit $maxAllowedDelivery)"
+                "⚡⚡ ZERO-DELAY AUTO-ACCEPT SUCCESS! [Triggered=$swipeSuccess] App='$resolvedAppName' Store='$storeName' | Pickup: ${evalPickupKm ?: "N/A"} km (limit $maxAllowedPickup) | Delivery: ${evalDeliveryKm ?: targetEvaluationDistanceKm} km (limit $maxAllowedDelivery)"
             )
 
             notifyDriverAcceptedAsync()
 
             serviceScope.launch {
-                renderClient.evaluateOrder(
-                    appName = resolvedAppName,
-                    storeName = storeName,
-                    distanceKm = targetEvaluationDistanceKm,
-                    payoutSar = payoutSar,
-                    orderId = extractedOrderId,
-                    customerDistrict = customerDistrict,
-                    driverLat = LocationTrackingService.currentLatitude,
-                    driverLng = LocationTrackingService.currentLongitude,
-                    pickupDistanceKm = pickupDistKm,
-                    deliveryDistanceKm = deliveryDistKm
-                )
+                try {
+                    renderClient.evaluateOrder(
+                        appName = resolvedAppName,
+                        storeName = storeName,
+                        distanceKm = evalDeliveryKm ?: targetEvaluationDistanceKm,
+                        payoutSar = payoutSar,
+                        orderId = extractedOrderId,
+                        customerDistrict = customerDistrict,
+                        driverLat = LocationTrackingService.currentLatitude,
+                        driverLng = LocationTrackingService.currentLongitude,
+                        pickupDistanceKm = evalPickupKm,
+                        deliveryDistanceKm = evalDeliveryKm
+                    )
+                } catch (_: Exception) {
+                    // Standalone zero-hosting silent handling
+                }
             }
         } else {
             processedOrdersCache[deduplicationKey] = now
             val rejectReason = when {
-                !isDeliveryWithinLimit -> "مسافة العميل (${deliveryDistKm ?: targetEvaluationDistanceKm} كم) تتجاوز الحد الأقصى ($maxAllowedDelivery كم)"
-                !isPickupWithinLimit -> "مسافة المطعم ($pickupDistKm كم) تتجاوز الحد الأقصى ($maxAllowedPickup كم)"
+                !hasAnyDistance -> "لم يتم العثور على مسافة رقمية واضحة في العرض"
+                anyDistanceExceedsDeliveryLimit -> "تم رصد مسافة ($maxSeenDistance كم) تتجاوز الحد الأقصى المحدد ($maxAllowedDelivery كم)"
+                !isDeliveryWithinLimit -> "مسافة العميل ($evalDeliveryKm كم) تتجاوز الحد الأقصى ($maxAllowedDelivery كم)"
+                !isPickupWithinLimit -> "مسافة المطعم ($evalPickupKm كم) تتجاوز الحد الأقصى ($maxAllowedPickup كم)"
                 else -> "معطل أو خارج النطاق المحدد"
             }
 
@@ -417,18 +422,22 @@ class LocateGoAccessibilityService : AccessibilityService() {
             notifyDriverRejectedAsync()
 
             serviceScope.launch {
-                renderClient.evaluateOrder(
-                    appName = resolvedAppName,
-                    storeName = storeName,
-                    distanceKm = targetEvaluationDistanceKm,
-                    payoutSar = payoutSar,
-                    orderId = extractedOrderId,
-                    customerDistrict = customerDistrict,
-                    driverLat = LocationTrackingService.currentLatitude,
-                    driverLng = LocationTrackingService.currentLongitude,
-                    pickupDistanceKm = pickupDistKm,
-                    deliveryDistanceKm = deliveryDistKm
-                )
+                try {
+                    renderClient.evaluateOrder(
+                        appName = resolvedAppName,
+                        storeName = storeName,
+                        distanceKm = evalDeliveryKm ?: targetEvaluationDistanceKm,
+                        payoutSar = payoutSar,
+                        orderId = extractedOrderId,
+                        customerDistrict = customerDistrict,
+                        driverLat = LocationTrackingService.currentLatitude,
+                        driverLng = LocationTrackingService.currentLongitude,
+                        pickupDistanceKm = evalPickupKm,
+                        deliveryDistanceKm = evalDeliveryKm
+                    )
+                } catch (_: Exception) {
+                    // Standalone zero-hosting silent handling
+                }
             }
         }
     }
@@ -487,25 +496,28 @@ class LocateGoAccessibilityService : AccessibilityService() {
             val lowerStr = rawContent.lowercase()
             val isIgnored = IGNORED_NAV_TEXTS.any { lowerStr == it || lowerStr.startsWith("$it ") }
             if (!isIgnored) {
-                result.texts.add(rawContent)
+                val normalizedContent = normalizeArabicDigits(rawContent)
+                result.texts.add(normalizedContent)
 
                 // فحص سريع لنصوص المسافات أثناء المرور لتسريع التحليل
                 if (result.directDeliveryKm == null && (lowerStr.contains("عميل") || lowerStr.contains("توصيل") || lowerStr.contains("وجهة") || lowerStr.contains("delivery") || lowerStr.contains("dropoff"))) {
-                    val m = deliveryDistancePattern.matcher(rawContent)
+                    val m = deliveryDistancePattern.matcher(normalizedContent)
                     if (m.find()) {
-                        result.directDeliveryKm = m.group(1)?.replace(',', '.')?.toDoubleOrNull()
+                        val valStr = m.group(1) ?: m.group(2)
+                        result.directDeliveryKm = valStr?.replace(',', '.')?.toDoubleOrNull()
                     }
                 }
 
                 if (result.directPickupKm == null && (lowerStr.contains("مطعم") || lowerStr.contains("متجر") || lowerStr.contains("استلام") || lowerStr.contains("pickup") || lowerStr.contains("store"))) {
-                    val m = pickupDistancePattern.matcher(rawContent)
+                    val m = pickupDistancePattern.matcher(normalizedContent)
                     if (m.find()) {
-                        result.directPickupKm = m.group(1)?.replace(',', '.')?.toDoubleOrNull()
+                        val valStr = m.group(1) ?: m.group(2)
+                        result.directPickupKm = valStr?.replace(',', '.')?.toDoubleOrNull()
                     }
                 }
 
                 if (result.directPayoutSar == null && (lowerStr.contains("ريال") || lowerStr.contains("ر.س") || lowerStr.contains("sar"))) {
-                    val m = payoutPattern.matcher(rawContent)
+                    val m = payoutPattern.matcher(normalizedContent)
                     if (m.find()) {
                         result.directPayoutSar = m.group(1)?.replace(',', '.')?.toDoubleOrNull()
                     }
@@ -699,18 +711,29 @@ class LocateGoAccessibilityService : AccessibilityService() {
         return false
     }
 
+    private fun normalizeArabicDigits(input: String): String {
+        val sb = StringBuilder(input.length)
+        for (ch in input) {
+            when (ch) {
+                in '\u0660'..'\u0669' -> sb.append(('0' + (ch - '\u0660')))
+                in '\u06F0'..'\u06F9' -> sb.append(('0' + (ch - '\u06F0')))
+                '\u066B', '\u066C', '،' -> sb.append('.')
+                else -> sb.append(ch)
+            }
+        }
+        return sb.toString()
+    }
+
     private fun extractAllDistancesFromTexts(texts: List<String>): List<Double> {
         val result = mutableListOf<Double>()
-        val kmPattern = Pattern.compile("([0-9\\u0660-\\u0669]+(?:[.,][0-9\\u0660-\\u0669]+)?)\\s*(?:كم|كيلو|km|k\\.m)", Pattern.CASE_INSENSITIVE or Pattern.UNICODE_CASE)
+        val kmPattern = Pattern.compile("(\\d+(?:[.,]\\d+)?)\\s*(?:كم|كيلو|km|k\\.m)", Pattern.CASE_INSENSITIVE or Pattern.UNICODE_CASE)
         for (item in texts) {
-            val m = kmPattern.matcher(item)
+            val normalizedText = normalizeArabicDigits(item)
+            val m = kmPattern.matcher(normalizedText)
             while (m.find()) {
                 val raw = m.group(1) ?: continue
-                val normalized = raw.map { ch ->
-                    if (ch in '\u0660'..'\u0669') ('0' + (ch - '\u0660')) else ch
-                }.joinToString("").replace(',', '.')
-                normalized.toDoubleOrNull()?.let {
-                    if (it >= 0.0) result.add(it)
+                raw.replace(',', '.').toDoubleOrNull()?.let {
+                    if (it in 0.0..150.0) result.add(it)
                 }
             }
         }

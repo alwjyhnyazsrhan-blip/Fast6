@@ -128,10 +128,12 @@ export async function validateLicenseOnline(
       };
     }
 
-    // البحث عن الكود المطابق
-    const match = codesList.find(
-      (item: any) => (item?.code || '').toString().trim().toUpperCase() === normalized
-    );
+    // البحث عن الكود المطابق (مع معالجة ذكية لالتباس 0 و O)
+    const cleanO0 = (s: string) => s.replace(/O/g, '0');
+    const normalizedO0 = cleanO0(normalized);
+    const match =
+      codesList.find((item: any) => (item?.code || '').toString().trim().toUpperCase() === normalized) ||
+      codesList.find((item: any) => cleanO0((item?.code || '').toString().trim().toUpperCase()) === normalizedO0);
 
     if (!match) {
       return {
