@@ -67,15 +67,10 @@ export const Header: React.FC<HeaderProps> = ({
                   <span className="w-1.5 h-1.5 rounded-full bg-amber-400 animate-pulse"></span>
                   Firebase Cloud
                 </span>
-                {status.serverConnected ? (
+                {status.serverConnected && (
                   <span className="flex items-center gap-1 text-[11px] text-emerald-400 bg-emerald-950/50 px-2 py-0.5 rounded-full border border-emerald-500/30" title="السيرفر الخارجي متصل">
                     <Wifi className="w-3 h-3 text-emerald-400" />
                     السيرفر متصل
-                  </span>
-                ) : (
-                  <span className="flex items-center gap-1 text-[11px] text-emerald-300 bg-emerald-950/60 px-2.5 py-0.5 rounded-full border border-emerald-500/40 font-medium shadow-sm" title="التطبيق يعمل بوضع الاستقلالية التامة 100% محلياً على هاتفك بدون الحاجة لأي سيرفر أو استضافة مدفوعة">
-                    <span className="w-1.5 h-1.5 rounded-full bg-emerald-400 animate-pulse"></span>
-                    مستقل (بدون استضافة) ⚡
                   </span>
                 )}
                 {currentDeviceId && (
