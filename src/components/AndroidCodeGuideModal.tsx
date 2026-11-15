@@ -1858,12 +1858,6 @@ class RenderApiClient(private val context: Context) {
    - التطبيق يتصل بها مباشرة عبر الإنترنت للتحقق الدوري من الأكواد.
    - في حال كان المندوب في منطقة بدون إنترنت، يستمر التطبيق بالعمل بناءً على الترخيص المحفوظ في ذاكرة الهاتف حتى تاريخ الانتهاء.
 
-هـ) لوحة تحكم المشرف (تعمل مباشرة بدون استضافة أيضاً!):
-   - ملف admin-portal.html هو ملف HTML واحد مستقل تماماً.
-   - يمكنك حفظ هذا الملف على هاتفك أو حاسوبك وفتحه مباشرة في أي متصفح (نقر مزدوج).
-   - تقوم بإدخال مفتاح المشرف وتوليد الأكواد بأي عدد من الأيام وتمديدها وحذفها،
-     حيث تتصل مباشرة بسحابة Firebase بدون الحاجة لأي خادم وسيط.
-
 3. كيف تبني ملف الـ APK المدمج الذي يعمل بدون استضافة للأبد؟
 --------------------------------------------------------------------------------
 الخيار 1 (تلقائي عبر GitHub Actions في السحابة - الموصى به):
@@ -1871,14 +1865,14 @@ class RenderApiClient(private val context: Context) {
 2. توجه لتبويب Actions في GitHub.
 3. سير عمل build-apk.yml سيقوم تلقائياً بتنفيذ:
    - npm install && npm run build (بناء واجهة الويب)
-   - نسخ الملفات إلى android/app/src/main/assets/
+   - نسخ ملفات واجهة المندوب فقط إلى android/app/src/main/assets/
    - بناء ملف الـ APK النهائي عبر Gradle 8.5 و JDK 17
-4. قم بتحميل ملف LocateGo-Driver-Release-Unsigned-APK-Standalone وتثبيته على الهاتف!
+4. قم بتحميل ملف LocateGo-Driver-Release-Unsigned-APK وتثبيته على الهاتف!
 
 الخيار 2 (بناء محلي على جهازك في سطر أوامر واحد):
    npm run build
    mkdir -p android/app/src/main/assets
-   cp -r dist/* android/app/src/main/assets/
+   cp -r dist/index.html dist/assets dist/data-bridge.js android/app/src/main/assets/
    cd android && ./gradlew assembleRelease
 
 مبروك! تطبيقك الآن يعمل 100% بشكل دائم ومستقل بدون دفع فلس واحد لأي استضافة!

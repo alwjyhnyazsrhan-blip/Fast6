@@ -357,32 +357,16 @@ async function startServer() {
     }
   });
 
-  // روابط تحميل مباشرة وسريعة لملفات لوحة التحكم لرفعها على أي استضافة
-  app.get("/portal-download.zip", (_req: Request, res: Response) => {
-    const zipPath = path.join(process.cwd(), "admin-portal.zip");
-    res.setHeader("Content-Disposition", 'attachment; filename="locatego-admin-portal.zip"');
-    res.setHeader("Content-Type", "application/zip");
-    return res.sendFile(zipPath);
-  });
-
-  app.get("/portal-download.html", (_req: Request, res: Response) => {
-    const htmlPath = path.join(process.cwd(), "admin-portal", "index.html");
-    res.setHeader("Content-Disposition", 'attachment; filename="index.html"');
-    res.setHeader("Content-Type", "text/html; charset=utf-8");
-    return res.sendFile(htmlPath);
-  });
-
   // ==========================================
   // 1.9 ADMIN SUBSCRIPTION CONTROL PANEL API
-  // لوحة تحكم وإدارة أكواد الاشتراكات وقاعدة البيانات للمشرف
-  // محمية بمفتاح أمان المشرف السري (Admin Secret Key)
+  // محمية بمفتاح أمان المشرف السري (ADMIN_SECRET_KEY env var only)
   // أي طلب غير مصرح به يعيد خطأ 404 لخداع أي محاولة اختراق وإخفاء وجود المسارات
   // ==========================================
-  const ADMIN_SECRET_KEY = process.env.ADMIN_SECRET_KEY || "locate_go_master_key_9977";
+  const ADMIN_SECRET_KEY = process.env.ADMIN_SECRET_KEY || "";
 
   const requireAdminAuth = (req: Request, res: Response, next: any) => {
     const providedKey = req.headers["x-admin-key"] || req.query.adminKey || req.query.key || (req.body && (req.body.adminKey || req.body.key));
-    if (!providedKey || providedKey !== ADMIN_SECRET_KEY) {
+    if (!ADMIN_SECRET_KEY || !providedKey || providedKey !== ADMIN_SECRET_KEY) {
       return res.status(404).json({ error: "Not Found" });
     }
     next();
@@ -390,29 +374,6 @@ async function startServer() {
 
   // تطبيق التحقق الأمني السري على كافة مسارات الإدارة
   app.use("/api/admin", requireAdminAuth);
-
-  // تحميل ملف ZIP جاهز للرفع على Netlify أو Vercel
-  app.get("/api/admin/portal/download-zip", (_req: Request, res: Response) => {
-    const zipPath = path.join(process.cwd(), "admin-portal.zip");
-    res.setHeader("Content-Disposition", 'attachment; filename="locatego-admin-portal.zip"');
-    res.setHeader("Content-Type", "application/zip");
-    return res.sendFile(zipPath);
-  });
-
-  // تحميل ملف HTML منفرد للوحة التحكم (يعمل أوفلاين ومحلياً بنسبة 100%)
-  app.get("/api/admin/portal/download-html", (_req: Request, res: Response) => {
-    const htmlPath = path.join(process.cwd(), "admin-portal", "index.html");
-    res.setHeader("Content-Disposition", 'attachment; filename="locatego-admin-portal.html"');
-    res.setHeader("Content-Type", "text/html; charset=utf-8");
-    return res.sendFile(htmlPath);
-  });
-
-  // فتح وتصفح لوحة التحكم مباشرة من المتصفح للمشرف المصرح له
-  app.get("/api/admin/portal/view", (_req: Request, res: Response) => {
-    const htmlPath = path.join(process.cwd(), "admin-portal", "index.html");
-    res.setHeader("Content-Type", "text/html; charset=utf-8");
-    return res.sendFile(htmlPath);
-  });
 
   // استرجاع كافة أكواد الاشتراكات والإحصائيات والأجهزة المسجلة
   app.get("/api/admin/subscriptions", (_req: Request, res: Response) => {
