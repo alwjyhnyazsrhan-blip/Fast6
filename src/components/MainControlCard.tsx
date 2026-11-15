@@ -343,10 +343,10 @@ export const MainControlCard: React.FC<MainControlCardProps> = ({
           <div className="p-3.5 bg-[#090d16] rounded-xl border border-indigo-500/30 text-center">
             <h4 className="text-xs font-bold text-slate-200 mb-1">سرعة السحب</h4>
             <div className="text-lg font-mono font-extrabold text-cyan-400 my-0.5">
-              {settings.swipeSpeedMs ?? 100} ms
+              {settings.swipeSpeedMs ?? 60} ms
             </div>
             <div className="grid grid-cols-4 gap-1 my-1.5">
-              {[60, 100, 150, 200].map((preset) => (
+              {[10, 20, 30, 40, 60, 100, 150, 200].map((preset) => (
                 <button
                   key={preset}
                   onClick={() => onUpdateSettings({ swipeSpeedMs: preset })}
@@ -361,7 +361,7 @@ export const MainControlCard: React.FC<MainControlCardProps> = ({
               ))}
             </div>
             <p className="text-[10px] text-slate-400">
-              60ms (فائق السرعة) | 100 | 150 | 200 – الأقل أسرع في اصطياد الطلبات
+              10ms (فائق السرعة) | 20 | 30 | 40 | 60 | 100 | 150 | 200 – الأقل أسرع في اصطياد الطلبات
             </p>
           </div>
 

@@ -195,7 +195,7 @@ class LocateGoAccessibilityService : AccessibilityService() {
         cachedMinPayoutSar = prefs.getFloat("min_payout_sar", 0.0f).toDouble()
         cachedAutoAccept = prefs.getBoolean("auto_accept", true)
         cachedSoundAlerts = prefs.getBoolean("sound_alerts", true)
-        cachedSwipeSpeedMs = prefs.getInt("swipe_speed_ms", 60).toLong().coerceIn(40L, 500L)
+        cachedSwipeSpeedMs = prefs.getInt("swipe_speed_ms", 60).toLong().coerceIn(10L, 500L)
         cachedTapIntervalMs = prefs.getInt("tap_interval_ms", 10).toLong()
         cachedEnableCustomInterval = prefs.getBoolean("enable_custom_interval", false)
 
@@ -207,7 +207,7 @@ class LocateGoAccessibilityService : AccessibilityService() {
                 "min_payout_sar" -> cachedMinPayoutSar = sp.getFloat("min_payout_sar", 0.0f).toDouble()
                 "auto_accept" -> cachedAutoAccept = sp.getBoolean("auto_accept", true)
                 "sound_alerts" -> cachedSoundAlerts = sp.getBoolean("sound_alerts", true)
-                "swipe_speed_ms" -> cachedSwipeSpeedMs = sp.getInt("swipe_speed_ms", 60).toLong().coerceIn(40L, 500L)
+                "swipe_speed_ms" -> cachedSwipeSpeedMs = sp.getInt("swipe_speed_ms", 60).toLong().coerceIn(10L, 500L)
                 "tap_interval_ms" -> cachedTapIntervalMs = sp.getInt("tap_interval_ms", 10).toLong()
                 "enable_custom_interval" -> cachedEnableCustomInterval = sp.getBoolean("enable_custom_interval", false)
             }
@@ -591,7 +591,7 @@ class LocateGoAccessibilityService : AccessibilityService() {
         val startX = (bounds.left.toFloat() + handlePadding).coerceAtLeast(10f)
         val endX = (bounds.right.toFloat() - handlePadding).coerceAtMost(screenWidth - 10f)
 
-        val durationMs = cachedSwipeSpeedMs.coerceIn(40L, 200L)
+        val durationMs = cachedSwipeSpeedMs.coerceIn(10L, 200L)
 
         // بناء حزمة إيماءات مركبة وشاملة (Hardware Tap + Dual RTL/LTR Swipes)
         val gestureBuilder = GestureDescription.Builder()
