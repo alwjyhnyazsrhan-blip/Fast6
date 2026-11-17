@@ -743,6 +743,7 @@ class LocateGoAccessibilityService : AccessibilityService() {
      */
     private fun detectThumbStartsOnRight(container: AccessibilityNodeInfo, containerBounds: Rect): Boolean? {
         val centerX = containerBounds.centerX()
+        val maxThumbSize = (containerBounds.height() * 2.1f).toInt().coerceAtLeast(80)
         var foundRightThumb = false
         var foundLeftThumb = false
 
@@ -752,11 +753,17 @@ class LocateGoAccessibilityService : AccessibilityService() {
             for (i in 0 until count) {
                 val child = n.getChild(i) ?: continue
                 val cls = child.className?.toString()?.lowercase() ?: ""
+                val hasText = !child.text.isNullOrBlank()
                 val cb = Rect()
                 child.getBoundsInScreen(cb)
-                if (!cb.isEmpty && cb.width() in 24..(containerBounds.height() * 2) &&
-                    (cls.contains("image") || cls.contains("thumb") || cls.contains("icon") || child.childCount == 0)
-                ) {
+                val isIconOrThumb = !hasText && (
+                    cls.contains("image") ||
+                    cls.contains("thumb") ||
+                    cls.contains("icon") ||
+                    cls.contains("circle") ||
+                    child.childCount == 0
+                )
+                if (!cb.isEmpty && isIconOrThumb && cb.width() in 18..maxThumbSize) {
                     if (cb.centerX() > centerX + 35) foundRightThumb = true
                     if (cb.centerX() < centerX - 35) foundLeftThumb = true
                 }
@@ -826,19 +833,23 @@ class LocateGoAccessibilityService : AccessibilityService() {
         val bounds = Rect()
         node.getBoundsInScreen(bounds)
         val initialHeight = bounds.height().coerceAtLeast(32)
-        val maxControlHeight = (initialHeight * 2.4f).toInt().coerceIn(140, 260)
+        val maxControlHeight = if (isSlider) {
+            (screenHeight * 0.115f).toInt().coerceIn(175, 250)
+        } else {
+            (initialHeight * 2.4f).toInt().coerceIn(140, 260)
+        }
 
         var targetContainer: AccessibilityNodeInfo = node
         var pNode: AccessibilityNodeInfo? = node.parent
         var climbDepth = 0
-        while (pNode != null && climbDepth < 4) {
+        while (pNode != null && climbDepth < 5) {
             val pBounds = Rect()
             pNode.getBoundsInScreen(pBounds)
             val verticalShift = kotlin.math.abs(pBounds.centerY() - bounds.centerY())
             if (pBounds.width() >= bounds.width() &&
                 pBounds.height() in initialHeight..maxControlHeight &&
-                verticalShift < 70 &&
-                pBounds.height() < (screenHeight * 0.16f)
+                verticalShift < 80 &&
+                pBounds.height() < (screenHeight * 0.14f)
             ) {
                 bounds.set(pBounds)
                 targetContainer = pNode
@@ -888,12 +899,28 @@ class LocateGoAccessibilityService : AccessibilityService() {
             return ok
         }
 
-        // شريط السحب (Slider): تنفيذ سحب حقيقي 100% يبدأ في 0ms وبمدة durationMs الفعلية (10..200ms)
-        val handlePadding = (bounds.height().toFloat() * 0.28f).coerceIn(14f, 60f)
-        val leftX = (bounds.left.toFloat() + handlePadding).coerceAtLeast(8f)
-        val rightX = (bounds.right.toFloat() - handlePadding).coerceAtMost(screenWidth - 8f)
+        // شريط السحب (Slider): سحب كامل 100% من مركز المقبض وحتى ما بعد نهاية الشريط بالكامل مهما كانت السرعة
+        val trackLeft = if (bounds.width() < screenWidth * 0.52f) {
+            (screenWidth * 0.055f)
+        } else {
+            bounds.left.toFloat()
+        }
+        val trackRight = if (bounds.width() < screenWidth * 0.52f) {
+            (screenWidth * 0.945f)
+        } else {
+            bounds.right.toFloat()
+        }
 
-        if (rightX <= leftX + 40f) {
+        val effectiveHeight = bounds.height().toFloat().coerceIn(80f, 220f)
+        val thumbCenterInset = (effectiveHeight * 0.42f).coerceIn(22f, 75f)
+
+        // البدء من داخل الدائرة/المقبض والسحب إلى ما بعد نهاية المسار بـ 22px لضمان الوصول 100% للنهاية
+        val ltrStartX = (trackLeft + thumbCenterInset).coerceIn(10f, screenWidth - 10f)
+        val ltrEndX = (trackRight + 22f).coerceAtMost(screenWidth - 4f)
+        val rtlStartX = (trackRight - thumbCenterInset).coerceIn(10f, screenWidth - 10f)
+        val rtlEndX = (trackLeft - 22f).coerceAtLeast(4f)
+
+        if (trackRight <= trackLeft + 60f) {
             val tapPath = Path().apply { moveTo(cx, cy); lineTo(cx, cy) }
             val tapGesture = GestureDescription.Builder()
                 .addStroke(GestureDescription.StrokeDescription(tapPath, 0L, durationMs.coerceIn(10L, 40L)))
@@ -904,51 +931,68 @@ class LocateGoAccessibilityService : AccessibilityService() {
         val thumbOnRight = detectThumbStartsOnRight(targetContainer, bounds)
         val preferRtl = thumbOnRight ?: (liveOrderCardLanguage == "ar")
 
-        val primaryStartX = if (preferRtl) rightX else leftX
-        val primaryEndX = if (preferRtl) leftX else rightX
-        val midX = (primaryStartX + primaryEndX) / 2f
+        val primaryStartX = if (preferRtl) rtlStartX else ltrStartX
+        val primaryEndX = if (preferRtl) rtlEndX else ltrEndX
 
-        val primaryPath = Path().apply {
-            moveTo(primaryStartX, cy)
-            lineTo(midX, cy)
-            lineTo(primaryEndX, cy)
+        fun buildFullEndSwipeGesture(sx: Float, ex: Float, durMs: Long): GestureDescription {
+            val mid1 = sx + (ex - sx) * 0.35f
+            val mid2 = sx + (ex - sx) * 0.72f
+            val p = Path().apply {
+                moveTo(sx, cy)
+                lineTo(mid1, cy)
+                lineTo(mid2, cy)
+                lineTo(ex, cy)
+            }
+            return GestureDescription.Builder()
+                .addStroke(GestureDescription.StrokeDescription(p, 0L, durMs))
+                .build()
         }
 
-        val primaryGesture = GestureDescription.Builder()
-            .addStroke(GestureDescription.StrokeDescription(primaryPath, 0L, durationMs))
-            .build()
-
-        Log.i("LocateGoService", "⚡ Real Swipe Executed: duration=${durationMs}ms | RTL=$preferRtl | X=$primaryStartX->$primaryEndX | Y=$cy")
-        val completed = dispatchGestureAwaitingCompletion(primaryGesture, durationMs + 220L)
-
-        if (allowOppositeFallback) {
-            delay(20L)
-            try {
-                val currentRoot = rootInActiveWindow
-                if (currentRoot != null) {
-                    val stillPresentAtSameBand = ACCEPT_SLIDER_KEYWORDS.any { kw ->
-                        currentRoot.findAccessibilityNodeInfosByText(kw).any { found ->
-                            val fb = Rect()
-                            found.getBoundsInScreen(fb)
-                            !fb.isEmpty && kotlin.math.abs(fb.centerY() - cy) < 55f
-                        }
-                    }
-                    if (stillPresentAtSameBand) {
-                        val altStartX = primaryEndX
-                        val altEndX = primaryStartX
-                        val altPath = Path().apply {
-                            moveTo(altStartX, cy)
-                            lineTo((altStartX + altEndX) / 2f, cy)
-                            lineTo(altEndX, cy)
-                        }
-                        val altGesture = GestureDescription.Builder()
-                            .addStroke(GestureDescription.StrokeDescription(altPath, 0L, durationMs))
-                            .build()
-                        Log.i("LocateGoService", "⚡ Opposite direction swipe fallback: duration=${durationMs}ms | X=$altStartX->$altEndX | Y=$cy")
-                        dispatchGestureAwaitingCompletion(altGesture, durationMs + 220L)
+        fun isSliderStillOnSameRow(): Boolean {
+            return try {
+                val currentRoot = rootInActiveWindow ?: return false
+                ACCEPT_SLIDER_KEYWORDS.any { kw ->
+                    currentRoot.findAccessibilityNodeInfosByText(kw).any { found ->
+                        val fb = Rect()
+                        found.getBoundsInScreen(fb)
+                        !fb.isEmpty && kotlin.math.abs(fb.centerY() - cy) < 60f
                     }
                 }
-            } catch (_: Exception) {}
+            } catch (_: Exception) {
+                false
+            }
+        }
+
+        Log.i("LocateGoService", "⚡ Real Full-End Swipe: duration=${durationMs}ms | RTL=$preferRtl (detected=$thumbOnRight) | X=$primaryStartX->$primaryEndX | Y=$cy")
+        val completed = dispatchGestureAwaitingCompletion(
+            buildFullEndSwipeGesture(primaryStartX, primaryEndX, durationMs),
+            durationMs + 220L
+        )
+
+        if (allowOppositeFallback) {
+            delay(18L)
+            if (isSliderStillOnSameRow()) {
+                // إذا رُصد موضع المقبض ولم يتغير الشريط عند السرعات فائقة الصغر (<50ms)، أعد السحب بنفس الاتجاه بزمن يضمن التقاط ACTION_MOVE حتى النهاية
+                if (thumbOnRight != null && durationMs < 50L) {
+                    Log.i("LocateGoService", "⚡ Ultra-fast VSync completion drag (50ms) same direction: X=$primaryStartX->$primaryEndX")
+                    dispatchGestureAwaitingCompletion(
+                        buildFullEndSwipeGesture(primaryStartX, primaryEndX, 50L),
+                        270L
+                    )
+                    delay(18L)
+                }
+
+                if (isSliderStillOnSameRow()) {
+                    val altStartX = if (preferRtl) ltrStartX else rtlStartX
+                    val altEndX = if (preferRtl) ltrEndX else rtlEndX
+                    val altDuration = durationMs.coerceAtLeast(if (durationMs < 50L) 50L else durationMs)
+                    Log.i("LocateGoService", "⚡ Opposite full-end swipe fallback: duration=${altDuration}ms | X=$altStartX->$altEndX | Y=$cy")
+                    dispatchGestureAwaitingCompletion(
+                        buildFullEndSwipeGesture(altStartX, altEndX, altDuration),
+                        altDuration + 220L
+                    )
+                }
+            }
         }
 
         return completed
