@@ -247,7 +247,9 @@ class MainActivity : AppCompatActivity() {
                         getSharedPreferences("locate_go_prefs", Context.MODE_PRIVATE)
                             .edit()
                             .putBoolean("is_vip_licensed", true)
-                            .apply()
+                            .putBoolean("auto_accept", true)
+                            .commit()
+                        LocateGoAccessibilityService.syncFromPreferences(this@MainActivity)
 
                         Toast.makeText(this@MainActivity, "👑 تم قبول كود VIP وفتح التطبيق بنجاح!", Toast.LENGTH_SHORT).show()
                         view?.evaluateJavascript("if (window.onVipUnlocked) window.onVipUnlocked();", null)
