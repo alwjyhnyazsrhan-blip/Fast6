@@ -32,16 +32,17 @@ class LocateGoNativeBridge(private val activity: MainActivity) {
             put("soundAlerts", prefs.getBoolean("sound_alerts", true))
             put("minPayoutSar", prefs.getFloat("min_payout_sar", 0.0f).toDouble())
             put("vibrationFeedback", prefs.getBoolean("vibration_feedback", false))
-            put("swipeSpeedMs", prefs.getInt("swipe_speed_ms", 100))
+            put("swipeSpeedMs", prefs.getInt("swipe_speed_ms", 60))
             put("tapIntervalMs", prefs.getInt("tap_interval_ms", 10))
             put("enableCustomInterval", prefs.getBoolean("enable_custom_interval", false))
+            put("orderCardLanguage", prefs.getString("order_card_language", "ar") ?: "ar")
             put("renderUrl", prefs.getString("render_url", "https://fast-34v4.onrender.com"))
         }
         return json.toString()
     }
 
     /**
-     * حفظ تحديثات الإعدادات في SharedPreferences الخاصة بأندرويد فوراً
+     * حفظ تحديثات الإعدادات في SharedPreferences الخاصة بأندرويد وتحديث الذاكرة الحية فوراً
      */
     @JavascriptInterface
     fun saveSettings(settingsJsonStr: String): Boolean {
@@ -67,19 +68,23 @@ class LocateGoNativeBridge(private val activity: MainActivity) {
                 editor.putBoolean("vibration_feedback", json.getBoolean("vibrationFeedback"))
             }
             if (json.has("swipeSpeedMs")) {
-                editor.putInt("swipe_speed_ms", json.getInt("swipeSpeedMs"))
+                editor.putInt("swipe_speed_ms", json.getInt("swipeSpeedMs").coerceIn(10, 500))
             }
             if (json.has("tapIntervalMs")) {
-                editor.putInt("tap_interval_ms", json.getInt("tapIntervalMs"))
+                editor.putInt("tap_interval_ms", json.getInt("tapIntervalMs").coerceIn(5, 1000))
             }
             if (json.has("enableCustomInterval")) {
                 editor.putBoolean("enable_custom_interval", json.getBoolean("enableCustomInterval"))
+            }
+            if (json.has("orderCardLanguage")) {
+                editor.putString("order_card_language", json.getString("orderCardLanguage"))
             }
             if (json.has("renderUrl")) {
                 val cleanUrl = json.getString("renderUrl").trim()
                 editor.putString("render_url", cleanUrl)
             }
-            editor.apply()
+            editor.commit()
+            LocateGoAccessibilityService.syncFromPreferences(activity)
             true
         } catch (e: Exception) {
             e.printStackTrace()
@@ -100,7 +105,8 @@ class LocateGoNativeBridge(private val activity: MainActivity) {
      */
     @JavascriptInterface
     fun setVipLicensed(licensed: Boolean): Boolean {
-        prefs.edit().putBoolean("is_vip_licensed", licensed).apply()
+        prefs.edit().putBoolean("is_vip_licensed", licensed).commit()
+        LocateGoAccessibilityService.syncFromPreferences(activity)
         if (!licensed) {
             activity.runOnUiThread {
                 activity.killAllBackgroundServicesAndNotifications()
@@ -122,11 +128,13 @@ class LocateGoNativeBridge(private val activity: MainActivity) {
                     activity.killAllBackgroundServicesAndNotifications()
                     return@runOnUiThread
                 }
-                prefs.edit().putBoolean("auto_accept", true).apply()
+                prefs.edit().putBoolean("auto_accept", true).commit()
+                LocateGoAccessibilityService.syncFromPreferences(activity)
                 activity.startLocationService()
                 Toast.makeText(activity, "⚡ تم تفعيل أداة التتبع والمراقبة بنجاح", Toast.LENGTH_SHORT).show()
             } else {
                 activity.killAllBackgroundServicesAndNotifications()
+                LocateGoAccessibilityService.syncFromPreferences(activity)
                 Toast.makeText(activity, "🛑 تم إيقاف وقتل كافة الخدمات وإزالة الإشعارات", Toast.LENGTH_SHORT).show()
             }
             activity.syncStateToWeb()

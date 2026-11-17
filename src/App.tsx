@@ -560,9 +560,10 @@ export default function App() {
             soundAlerts: parsed.soundAlerts ?? prev.soundAlerts,
             minPayoutSar: parsed.minPayoutSar ?? prev.minPayoutSar,
             vibrationFeedback: parsed.vibrationFeedback ?? prev.vibrationFeedback,
-            swipeSpeedMs: parsed.swipeSpeedMs ?? prev.swipeSpeedMs ?? 100,
+            swipeSpeedMs: parsed.swipeSpeedMs ?? prev.swipeSpeedMs ?? 60,
             tapIntervalMs: parsed.tapIntervalMs ?? prev.tapIntervalMs ?? 10,
             enableCustomInterval: parsed.enableCustomInterval ?? prev.enableCustomInterval ?? false,
+            orderCardLanguage: parsed.orderCardLanguage ?? prev.orderCardLanguage ?? 'ar',
           }));
         }
 
