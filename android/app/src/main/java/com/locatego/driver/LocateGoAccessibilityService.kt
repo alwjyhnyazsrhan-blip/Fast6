@@ -294,7 +294,11 @@ class LocateGoAccessibilityService : AccessibilityService() {
         val acceptCandidates: MutableList<AcceptCandidate> = mutableListOf(),
         val positionedDistances: MutableList<Triple<Int, Int, Double>> = mutableListOf(),
         var driverAnchorX: Int? = null,
+        var driverAnchorY: Int? = null,
         var storeAnchorX: Int? = null,
+        var storeAnchorY: Int? = null,
+        val driverAnchors: MutableList<Pair<Int, Int>> = mutableListOf(),
+        val storeAnchors: MutableList<Pair<Int, Int>> = mutableListOf(),
         var directDeliveryKm: Double? = null,
         var directPickupKm: Double? = null,
         var directPayoutSar: Double? = null
@@ -479,6 +483,16 @@ class LocateGoAccessibilityService : AccessibilityService() {
                     scanResult.texts.addAll(altScan.texts)
                     scanResult.positionedTexts.clear()
                     scanResult.positionedTexts.addAll(altScan.positionedTexts)
+                    scanResult.positionedDistances.clear()
+                    scanResult.positionedDistances.addAll(altScan.positionedDistances)
+                    scanResult.driverAnchors.clear()
+                    scanResult.driverAnchors.addAll(altScan.driverAnchors)
+                    scanResult.storeAnchors.clear()
+                    scanResult.storeAnchors.addAll(altScan.storeAnchors)
+                    scanResult.driverAnchorX = altScan.driverAnchorX
+                    scanResult.driverAnchorY = altScan.driverAnchorY
+                    scanResult.storeAnchorX = altScan.storeAnchorX
+                    scanResult.storeAnchorY = altScan.storeAnchorY
                     scanResult.acceptCandidates.addAll(altScan.acceptCandidates)
                     scanResult.directDeliveryKm = altScan.directDeliveryKm
                     scanResult.directPickupKm = altScan.directPickupKm
@@ -537,12 +551,25 @@ class LocateGoAccessibilityService : AccessibilityService() {
                     val slicedTexts = scanResult.positionedTexts
                         .filter { (y, _) -> y in prevMidY..nextMidY }
                         .map { it.second }
+                    val bandScan = FastScanResult()
+                    bandScan.positionedDistances.addAll(
+                        scanResult.positionedDistances.filter { (_, y, _) -> y in prevMidY..nextMidY }
+                    )
+                    scanResult.driverAnchors.firstOrNull { (_, y) -> y in prevMidY..nextMidY }?.let {
+                        bandScan.driverAnchorX = it.first
+                        bandScan.driverAnchorY = it.second
+                    }
+                    scanResult.storeAnchors.firstOrNull { (_, y) -> y in prevMidY..nextMidY }?.let {
+                        bandScan.storeAnchorX = it.first
+                        bandScan.storeAnchorY = it.second
+                    }
+                    resolveSpatialRowDistances(bandScan)
                     val cardTexts = if (slicedTexts.isNotEmpty()) slicedTexts else scanResult.texts
                     evaluatedCards.add(
                         evaluateTextsAgainstRules(
                             texts = cardTexts,
-                            directDeliveryKm = null,
-                            directPickupKm = null,
+                            directDeliveryKm = bandScan.directDeliveryKm,
+                            directPickupKm = bandScan.directPickupKm,
                             directPayoutSar = null,
                             candidate = cand
                         )
@@ -756,10 +783,21 @@ class LocateGoAccessibilityService : AccessibilityService() {
                     if (collectButtons) {
                         result.positionedTexts.add(tb.centerY() to normalizedContent)
                     }
-                    if (lowerStr == "موقعك" || lowerStr.contains("your location")) {
-                        result.driverAnchorX = tb.centerX()
-                    } else if (lowerStr == "المتجر" || lowerStr == "المطعم" || lowerStr == "store" || lowerStr == "restaurant") {
-                        result.storeAnchorX = tb.centerX()
+                    val anchorLabel = lowerStr
+                        .replace(Regex("[\\u200E\\u200F\\u202A-\\u202E\\u2066-\\u2069]"), "")
+                        .trim()
+                    if (anchorLabel == "موقعك" || anchorLabel == "الموقع" || anchorLabel.contains("your location")) {
+                        if (result.driverAnchorX == null) {
+                            result.driverAnchorX = tb.centerX()
+                            result.driverAnchorY = tb.centerY()
+                        }
+                        result.driverAnchors.add(tb.centerX() to tb.centerY())
+                    } else if (anchorLabel == "المتجر" || anchorLabel == "المطعم" || anchorLabel == "store" || anchorLabel == "restaurant") {
+                        if (result.storeAnchorX == null) {
+                            result.storeAnchorX = tb.centerX()
+                            result.storeAnchorY = tb.centerY()
+                        }
+                        result.storeAnchors.add(tb.centerX() to tb.centerY())
                     }
                     val singleDistList = extractAllDistancesFromTexts(listOf(normalizedContent))
                     if (singleDistList.size == 1) {
@@ -801,23 +839,33 @@ class LocateGoAccessibilityService : AccessibilityService() {
     }
 
     /**
-     * ربط المسافات مكانياً حسب صف بطاقة لوكيت: (موقعك -> [مسافة المتجر] -> المتجر -> [مسافة العميل] -> العميل)
+     * ربط المسافات مكانياً حسب صف بطاقة لوكيت: (موقعك -> [مسافة المتجر/المطعم] -> المتجر -> [مسافة العميل] -> العميل)
      */
     private fun resolveSpatialRowDistances(scan: FastScanResult) {
         val dX = scan.driverAnchorX ?: return
         val sX = scan.storeAnchorX ?: return
         if (scan.positionedDistances.size < 2 || dX == sX) return
 
+        val anchorY = scan.storeAnchorY ?: scan.driverAnchorY
+        val rowDistances = if (anchorY != null) {
+            val nearby = scan.positionedDistances.filter { (_, y, _) ->
+                kotlin.math.abs(y - anchorY) <= 180
+            }
+            if (nearby.size >= 2) nearby else scan.positionedDistances
+        } else {
+            scan.positionedDistances
+        }
+
         val rtlFlow = dX > sX
         val minBetween = minOf(dX, sX)
         val maxBetween = maxOf(dX, sX)
 
-        val pickupMatch = scan.positionedDistances.firstOrNull { (x, _, _) ->
+        val pickupMatch = rowDistances.firstOrNull { (x, _, _) ->
             x in minBetween..maxBetween
         }
-        val deliveryMatch = scan.positionedDistances.firstOrNull { (x, _, _) ->
+        val deliveryMatch = rowDistances.firstOrNull { (x, _, _) ->
             if (rtlFlow) x < sX else x > sX
-        } ?: scan.positionedDistances.firstOrNull { it !== pickupMatch }
+        } ?: rowDistances.firstOrNull { it !== pickupMatch }
 
         if (pickupMatch != null && scan.directPickupKm == null) {
             scan.directPickupKm = pickupMatch.third
@@ -828,11 +876,37 @@ class LocateGoAccessibilityService : AccessibilityService() {
     }
 
     /**
-     * تحديد موضع مقبض شريط السحب (هل يبدأ من اليمين أم من اليسار؟) لضمان اتجاه سحب حقيقي 100%
+     * التحقق من عدم احتواء الحاوية على أزرار رفض/إلغاء/GPS لمنع امتداد حدود السحب نحو صف Reject العلوي
+     */
+    private fun containsForbiddenControl(root: AccessibilityNodeInfo?, depth: Int = 0): Boolean {
+        if (root == null || depth > 3) return false
+        val txt = root.text?.toString()?.lowercase() ?: ""
+        val desc = root.contentDescription?.toString()?.lowercase() ?: ""
+        val viewId = root.viewIdResourceName?.lowercase() ?: ""
+        if (txt.contains("reject") || txt.contains("رفض") || txt.contains("إلغاء") ||
+            txt.contains("cancel") || txt.contains("decline") || txt.contains("dismiss") ||
+            desc.contains("reject") || desc.contains("رفض") || desc.contains("cancel") ||
+            viewId.contains("reject") || viewId.contains("cancel") ||
+            viewId.contains("decline") || viewId.contains("dismiss")
+        ) {
+            return true
+        }
+        val count = root.childCount
+        for (i in 0 until count) {
+            if (containsForbiddenControl(root.getChild(i), depth + 1)) return true
+        }
+        return false
+    }
+
+    /**
+     * تحديد موضع مقبض شريط السحب (هل يبدأ من اليمين أم من اليسار؟) ضمن الارتفاع العمودي للشريط فقط
      */
     private fun detectThumbStartsOnRight(container: AccessibilityNodeInfo, containerBounds: Rect): Boolean? {
         val centerX = containerBounds.centerX()
         val maxThumbSize = (containerBounds.height() * 2.1f).toInt().coerceAtLeast(80)
+        val minY = containerBounds.top - 12
+        val maxY = containerBounds.bottom + 12
+        val maxThumbHeight = (containerBounds.height() * 1.25f).toInt().coerceAtLeast(60)
         var foundRightThumb = false
         var foundLeftThumb = false
 
@@ -845,6 +919,7 @@ class LocateGoAccessibilityService : AccessibilityService() {
                 val hasText = !child.text.isNullOrBlank()
                 val cb = Rect()
                 child.getBoundsInScreen(cb)
+                val onSameSliderRow = cb.centerY() in minY..maxY && cb.height() <= maxThumbHeight
                 val isIconOrThumb = !hasText && (
                     cls.contains("image") ||
                     cls.contains("thumb") ||
@@ -852,7 +927,7 @@ class LocateGoAccessibilityService : AccessibilityService() {
                     cls.contains("circle") ||
                     child.childCount == 0
                 )
-                if (!cb.isEmpty && isIconOrThumb && cb.width() in 18..maxThumbSize) {
+                if (!cb.isEmpty && onSameSliderRow && isIconOrThumb && cb.width() in 18..maxThumbSize) {
                     if (cb.centerX() > centerX + 35) foundRightThumb = true
                     if (cb.centerX() < centerX - 35) foundLeftThumb = true
                 }
@@ -923,9 +998,9 @@ class LocateGoAccessibilityService : AccessibilityService() {
         node.getBoundsInScreen(bounds)
         val initialHeight = bounds.height().coerceAtLeast(32)
         val maxControlHeight = if (isSlider) {
-            (screenHeight * 0.115f).toInt().coerceIn(175, 250)
+            (screenHeight * 0.088f).toInt().coerceIn(135, 195)
         } else {
-            (initialHeight * 2.4f).toInt().coerceIn(140, 260)
+            (initialHeight * 2.1f).toInt().coerceIn(130, 210)
         }
 
         var targetContainer: AccessibilityNodeInfo = node
@@ -937,8 +1012,9 @@ class LocateGoAccessibilityService : AccessibilityService() {
             val verticalShift = kotlin.math.abs(pBounds.centerY() - bounds.centerY())
             if (pBounds.width() >= bounds.width() &&
                 pBounds.height() in initialHeight..maxControlHeight &&
-                verticalShift < 80 &&
-                pBounds.height() < (screenHeight * 0.14f)
+                verticalShift < 48 &&
+                pBounds.height() < (screenHeight * 0.11f) &&
+                !containsForbiddenControl(pNode)
             ) {
                 bounds.set(pBounds)
                 targetContainer = pNode
@@ -1000,14 +1076,14 @@ class LocateGoAccessibilityService : AccessibilityService() {
             bounds.right.toFloat()
         }
 
-        val effectiveHeight = bounds.height().toFloat().coerceIn(80f, 220f)
-        val thumbCenterInset = (effectiveHeight * 0.42f).coerceIn(22f, 75f)
+        val effectiveHeight = bounds.height().toFloat().coerceIn(80f, 200f)
+        val thumbCenterInset = (effectiveHeight * 0.45f).coerceIn(22f, 75f)
 
         // البقاء داخل حدود الشريط الحقيقية مع الوصول الكامل لما بعد مركز موضع التوقف النهائي
         val ltrStartX = (trackLeft + thumbCenterInset).coerceIn(10f, screenWidth - 10f)
-        val ltrEndX = (trackRight - 6f).coerceAtMost(screenWidth - 6f)
+        val ltrEndX = (trackRight - 4f).coerceAtMost(screenWidth - 4f)
         val rtlStartX = (trackRight - thumbCenterInset).coerceIn(10f, screenWidth - 10f)
-        val rtlEndX = (trackLeft + 6f).coerceAtLeast(6f)
+        val rtlEndX = (trackLeft + 4f).coerceAtLeast(4f)
 
         if (trackRight <= trackLeft + 60f) {
             val tapPath = Path().apply { moveTo(cx, cy); lineTo(cx, cy) }
@@ -1017,12 +1093,12 @@ class LocateGoAccessibilityService : AccessibilityService() {
             return dispatchGestureAwaitingCompletion(tapGesture, durationMs + 180L)
         }
 
-        // فحص موضع المقبض داخل الشريط أو داخل حاويته الأب مباشرة (إن لم يكن النص في نفس الطبقة)
+        // فحص موضع المقبض داخل الشريط أو داخل حاويته الأب مباشرة (إن لم يكن يضم أزرار رفض/GPS)
         val thumbOnRight = detectThumbStartsOnRight(targetContainer, bounds)
             ?: targetContainer.parent?.let { p ->
                 val pb = Rect()
                 p.getBoundsInScreen(pb)
-                if (pb.height() in bounds.height()..(bounds.height() * 2 + 40)) {
+                if (pb.height() in bounds.height()..(bounds.height() * 2 + 40) && !containsForbiddenControl(p)) {
                     detectThumbStartsOnRight(p, bounds)
                 } else null
             }
@@ -1039,7 +1115,7 @@ class LocateGoAccessibilityService : AccessibilityService() {
             60f
         }.coerceIn(30f, 240f)
         val frameMs = 1000f / displayRefreshHz
-        val minVSyncSliderMs = (frameMs * 3.5f).toLong().coerceIn(32L, 58L)
+        val minVSyncSliderMs = (frameMs * 4.0f).toLong().coerceIn(42L, 68L)
         val effectiveSliderMs = durationMs.coerceAtLeast(minVSyncSliderMs)
 
         fun isSliderStillOnSameRow(): Boolean {
