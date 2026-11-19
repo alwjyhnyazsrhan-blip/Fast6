@@ -148,9 +148,13 @@ class LocateGoAccessibilityService : AccessibilityService() {
     private val serviceScope = CoroutineScope(SupervisorJob() + Dispatchers.IO)
     private lateinit var renderClient: RenderApiClient
     private var sharedPrefsListener: SharedPreferences.OnSharedPreferenceChangeListener? = null
+    private val POST_ACCEPT_COOLDOWN_MS = 5_000L
     @Volatile private var isBatchGestureRunning: Boolean = false
     @Volatile private var pendingRescanAfterBatch: Boolean = false
     @Volatile private var pendingRescanPackage: String = ""
+    @Volatile private var postAcceptCooldownUntilMs: Long = 0L
+    @Volatile private var cooldownResumePackage: String = ""
+    private var cooldownRescanJob: Job? = null
     private val packageLearnedRtl = ConcurrentHashMap<String, Boolean>()
 
     // تعابير نمطية مستهدفة بدقة عالية تدعم صيغتي: "المتجر 2.0 كم" وأيضاً "2.0 كم المتجر"
@@ -220,7 +224,13 @@ class LocateGoAccessibilityService : AccessibilityService() {
                 "max_distance_km" -> liveMaxAllowedKm = sp.getFloat("max_distance_km", 3.0f).toDouble()
                 "max_pickup_distance_km" -> liveMaxPickupKm = sp.getFloat("max_pickup_distance_km", 1.5f).toDouble()
                 "min_payout_sar" -> liveMinPayoutSar = sp.getFloat("min_payout_sar", 0.0f).toDouble()
-                "auto_accept" -> liveAutoAccept = sp.getBoolean("auto_accept", true)
+                "auto_accept" -> {
+                    liveAutoAccept = sp.getBoolean("auto_accept", true)
+                    if (!liveAutoAccept) {
+                        postAcceptCooldownUntilMs = 0L
+                        cooldownRescanJob?.cancel()
+                    }
+                }
                 "sound_alerts" -> liveSoundAlerts = sp.getBoolean("sound_alerts", true)
                 "swipe_speed_ms" -> liveSwipeSpeedMs = sp.getInt("swipe_speed_ms", 60).toLong().coerceIn(10L, 500L)
                 "tap_interval_ms" -> liveTapIntervalMs = sp.getInt("tap_interval_ms", 10).toLong()
@@ -540,6 +550,10 @@ class LocateGoAccessibilityService : AccessibilityService() {
             pendingRescanPackage = packageName
             return
         }
+        if (System.currentTimeMillis() < postAcceptCooldownUntilMs) {
+            cooldownResumePackage = packageName
+            return
+        }
 
         val displayHeight = resources.displayMetrics.heightPixels
         val scanResult = FastScanResult()
@@ -677,6 +691,7 @@ class LocateGoAccessibilityService : AccessibilityService() {
         }
 
         serviceScope.launch {
+            var anyOrderTriggered = false
             try {
                 for ((index, card) in matchingBatch.withIndex()) {
                     if (!liveIsVipLicensed || !liveAutoAccept) break
@@ -693,6 +708,9 @@ class LocateGoAccessibilityService : AccessibilityService() {
                         executeFallbackAccept(root)
                     } else {
                         false
+                    }
+                    if (accepted) {
+                        anyOrderTriggered = true
                     }
 
                     Log.i(
@@ -727,8 +745,28 @@ class LocateGoAccessibilityService : AccessibilityService() {
                 isBatchGestureRunning = false
             }
 
-            // فحص فوري بعد انتهاء الدفعة إذا وصلت طلبات أثناء السحب أو وُجدت طلبات متعددة
-            if (pendingRescanAfterBatch || matchingBatch.size > 1) {
+            if (anyOrderTriggered) {
+                // إيقاف السحب مؤقتاً لمدة 5 ثوانٍ بعد قبول الطلب أو الطلبات ثم استئناف السحب تلقائياً
+                val resumePkg = pendingRescanPackage.ifBlank { packageName }
+                pendingRescanAfterBatch = false
+                cooldownResumePackage = resumePkg
+                postAcceptCooldownUntilMs = System.currentTimeMillis() + POST_ACCEPT_COOLDOWN_MS
+                Log.i("LocateGoService", "⏸️ Post-accept 5s cooldown started (${POST_ACCEPT_COOLDOWN_MS}ms pause before next swipe).")
+
+                cooldownRescanJob?.cancel()
+                cooldownRescanJob = serviceScope.launch {
+                    delay(POST_ACCEPT_COOLDOWN_MS)
+                    postAcceptCooldownUntilMs = 0L
+                    val targetPkg = cooldownResumePackage.ifBlank { resumePkg }
+                    try {
+                        val freshRoot = rootInActiveWindow ?: findPackageWindowRoot(targetPkg)
+                        if (freshRoot != null && liveIsVipLicensed && liveAutoAccept) {
+                            Log.i("LocateGoService", "▶️ Post-accept 5s cooldown finished — resuming swipe scan.")
+                            inspectScreenForOrderOffer(freshRoot, targetPkg)
+                        }
+                    } catch (_: Exception) {}
+                }
+            } else if (pendingRescanAfterBatch || matchingBatch.size > 1) {
                 val rescanPkg = pendingRescanPackage.ifBlank { packageName }
                 pendingRescanAfterBatch = false
                 delay(15L)
