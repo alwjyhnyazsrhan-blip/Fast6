@@ -292,6 +292,9 @@ class LocateGoAccessibilityService : AccessibilityService() {
         val texts: MutableList<String> = mutableListOf(),
         val positionedTexts: MutableList<Pair<Int, String>> = mutableListOf(),
         val acceptCandidates: MutableList<AcceptCandidate> = mutableListOf(),
+        val positionedDistances: MutableList<Triple<Int, Int, Double>> = mutableListOf(),
+        var driverAnchorX: Int? = null,
+        var storeAnchorX: Int? = null,
         var directDeliveryKm: Double? = null,
         var directPickupKm: Double? = null,
         var directPayoutSar: Double? = null
@@ -516,6 +519,7 @@ class LocateGoAccessibilityService : AccessibilityService() {
                 if (cardRoot != null) {
                     val cardScan = FastScanResult()
                     fastSinglePassTraversal(cardRoot, cardScan, displayHeight, collectButtons = false)
+                    resolveSpatialRowDistances(cardScan)
                     val cardTexts = if (cardScan.texts.isNotEmpty()) cardScan.texts else scanResult.texts
                     evaluatedCards.add(
                         evaluateTextsAgainstRules(
@@ -547,6 +551,7 @@ class LocateGoAccessibilityService : AccessibilityService() {
             }
         } else {
             // طلب واحد في الشاشة
+            resolveSpatialRowDistances(scanResult)
             evaluatedCards.add(
                 evaluateTextsAgainstRules(
                     texts = scanResult.texts,
@@ -737,18 +742,28 @@ class LocateGoAccessibilityService : AccessibilityService() {
             }
         }
 
-        // 2. إضافة النص المؤهل وفحص المسافات المباشرة (يدعم النصوص المدمجة الطويلة في Compose/Flutter)
+        // 2. إضافة النص المؤهل وفحص المسافات المباشرة والمكانية (يدعم النصوص المدمجة الطويلة في Compose/Flutter)
         if (rawContent != null && rawContent.length in 2..1500) {
             val lowerStr = rawContent.lowercase()
             val isIgnored = IGNORED_NAV_TEXTS.any { lowerStr == it || lowerStr.startsWith("$it ") }
             if (!isIgnored) {
                 val normalizedContent = normalizeArabicDigits(rawContent)
                 result.texts.add(normalizedContent)
-                if (collectButtons) {
-                    val tb = Rect()
-                    node.getBoundsInScreen(tb)
-                    if (!tb.isEmpty) {
+
+                val tb = Rect()
+                node.getBoundsInScreen(tb)
+                if (!tb.isEmpty) {
+                    if (collectButtons) {
                         result.positionedTexts.add(tb.centerY() to normalizedContent)
+                    }
+                    if (lowerStr == "موقعك" || lowerStr.contains("your location")) {
+                        result.driverAnchorX = tb.centerX()
+                    } else if (lowerStr == "المتجر" || lowerStr == "المطعم" || lowerStr == "store" || lowerStr == "restaurant") {
+                        result.storeAnchorX = tb.centerX()
+                    }
+                    val singleDistList = extractAllDistancesFromTexts(listOf(normalizedContent))
+                    if (singleDistList.size == 1) {
+                        result.positionedDistances.add(Triple(tb.centerX(), tb.centerY(), singleDistList[0]))
                     }
                 }
 
@@ -782,6 +797,33 @@ class LocateGoAccessibilityService : AccessibilityService() {
         val childCount = node.childCount
         for (i in 0 until childCount) {
             fastSinglePassTraversal(node.getChild(i), result, displayHeight, collectButtons)
+        }
+    }
+
+    /**
+     * ربط المسافات مكانياً حسب صف بطاقة لوكيت: (موقعك -> [مسافة المتجر] -> المتجر -> [مسافة العميل] -> العميل)
+     */
+    private fun resolveSpatialRowDistances(scan: FastScanResult) {
+        val dX = scan.driverAnchorX ?: return
+        val sX = scan.storeAnchorX ?: return
+        if (scan.positionedDistances.size < 2 || dX == sX) return
+
+        val rtlFlow = dX > sX
+        val minBetween = minOf(dX, sX)
+        val maxBetween = maxOf(dX, sX)
+
+        val pickupMatch = scan.positionedDistances.firstOrNull { (x, _, _) ->
+            x in minBetween..maxBetween
+        }
+        val deliveryMatch = scan.positionedDistances.firstOrNull { (x, _, _) ->
+            if (rtlFlow) x < sX else x > sX
+        } ?: scan.positionedDistances.firstOrNull { it !== pickupMatch }
+
+        if (pickupMatch != null && scan.directPickupKm == null) {
+            scan.directPickupKm = pickupMatch.third
+        }
+        if (deliveryMatch != null && scan.directDeliveryKm == null) {
+            scan.directDeliveryKm = deliveryMatch.third
         }
     }
 
@@ -946,7 +988,7 @@ class LocateGoAccessibilityService : AccessibilityService() {
             return ok
         }
 
-        // شريط السحب (Slider): سحب كامل 100% من مركز المقبض وحتى ما بعد نهاية الشريط بالكامل مهما كانت السرعة
+        // شريط السحب (Slider): سحب موحّد مضمون الوصول إلى 100% من مركز المقبض حتى نهاية المسار داخل حدود الشريط
         val trackLeft = if (bounds.width() < screenWidth * 0.52f) {
             (screenWidth * 0.055f)
         } else {
@@ -961,11 +1003,11 @@ class LocateGoAccessibilityService : AccessibilityService() {
         val effectiveHeight = bounds.height().toFloat().coerceIn(80f, 220f)
         val thumbCenterInset = (effectiveHeight * 0.42f).coerceIn(22f, 75f)
 
-        // البدء من داخل الدائرة/المقبض والسحب إلى ما بعد نهاية المسار بـ 22px لضمان الوصول 100% للنهاية
+        // البقاء داخل حدود الشريط الحقيقية مع الوصول الكامل لما بعد مركز موضع التوقف النهائي
         val ltrStartX = (trackLeft + thumbCenterInset).coerceIn(10f, screenWidth - 10f)
-        val ltrEndX = (trackRight + 22f).coerceAtMost(screenWidth - 4f)
+        val ltrEndX = (trackRight - 6f).coerceAtMost(screenWidth - 6f)
         val rtlStartX = (trackRight - thumbCenterInset).coerceIn(10f, screenWidth - 10f)
-        val rtlEndX = (trackLeft - 22f).coerceAtLeast(4f)
+        val rtlEndX = (trackLeft + 6f).coerceAtLeast(6f)
 
         if (trackRight <= trackLeft + 60f) {
             val tapPath = Path().apply { moveTo(cx, cy); lineTo(cx, cy) }
@@ -975,11 +1017,30 @@ class LocateGoAccessibilityService : AccessibilityService() {
             return dispatchGestureAwaitingCompletion(tapGesture, durationMs + 180L)
         }
 
+        // فحص موضع المقبض داخل الشريط أو داخل حاويته الأب مباشرة (إن لم يكن النص في نفس الطبقة)
         val thumbOnRight = detectThumbStartsOnRight(targetContainer, bounds)
+            ?: targetContainer.parent?.let { p ->
+                val pb = Rect()
+                p.getBoundsInScreen(pb)
+                if (pb.height() in bounds.height()..(bounds.height() * 2 + 40)) {
+                    detectThumbStartsOnRight(p, bounds)
+                } else null
+            }
         val preferRtl = thumbOnRight ?: packageLearnedRtl[currentForegroundPackage] ?: (liveOrderCardLanguage == "ar")
 
         val primaryStartX = if (preferRtl) rtlStartX else ltrStartX
         val primaryEndX = if (preferRtl) rtlEndX else ltrEndX
+
+        // حساب الحد الأدنى المضمون لالتقاط ACTION_MOVE + TouchSlop حسب تردد الشاشة (60Hz/90Hz/120Hz) لمنع التوقف في المنتصف
+        val displayRefreshHz = try {
+            val dm = getSystemService(Context.DISPLAY_SERVICE) as? android.hardware.display.DisplayManager
+            dm?.getDisplay(android.view.Display.DEFAULT_DISPLAY)?.refreshRate ?: 60f
+        } catch (_: Exception) {
+            60f
+        }.coerceIn(30f, 240f)
+        val frameMs = 1000f / displayRefreshHz
+        val minVSyncSliderMs = (frameMs * 3.5f).toLong().coerceIn(32L, 58L)
+        val effectiveSliderMs = durationMs.coerceAtLeast(minVSyncSliderMs)
 
         fun isSliderStillOnSameRow(): Boolean {
             return try {
@@ -997,89 +1058,51 @@ class LocateGoAccessibilityService : AccessibilityService() {
         }
 
         /**
-         * تنفيذ سحب متصل بمرحلتين (Two-Stage Latched ContinueStroke):
-         * المرحلة 1: السحب بالسرعة المختارة (durationMs) مع إبقاء الإصبع مضغوطاً (willContinue = true)
-         * المرحلة 2: تثبيت لحظي عند النهاية 100% لإجبار النظام على إرسال ACTION_MOVE عند النهاية قبل رفع الإصبع ACTION_UP
-         * النتيجة: لا يتوقف السحب في المنتصف أبداً حتى على سرعات 10ms-30ms وشاشات 60Hz!
+         * سحب أحادي متصل (Single Atomic Stroke) بدون فصل IPC:
+         * - يحترم حدود الشريط الفعلية [trackLeft+6 .. trackRight-6]
+         * - يمر عبر نقاط متعددة لتجاوز touchSlop من أول إطار ثم الوصول الكامل إلى 100% النهاية
          */
-        suspend fun dispatchLatchedFullEndSwipe(sx: Float, ex: Float, durMs: Long): Boolean {
-            val mid1 = sx + (ex - sx) * 0.35f
-            val mid2 = sx + (ex - sx) * 0.72f
+        suspend fun dispatchAtomicFullSwipe(sx: Float, ex: Float, durMs: Long): Boolean {
             val dragPath = Path().apply {
                 moveTo(sx, cy)
-                lineTo(mid1, cy)
-                lineTo(mid2, cy)
+                lineTo(sx + (ex - sx) * 0.18f, cy)
+                lineTo(sx + (ex - sx) * 0.52f, cy)
+                lineTo(sx + (ex - sx) * 0.86f, cy)
                 lineTo(ex, cy)
             }
-
-            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
-                val endHoldMs = if (durMs < 50L) 24L else 14L
-                val tinyBackX = if (ex > sx) (ex - 2f).coerceAtLeast(4f) else (ex + 2f).coerceAtMost(screenWidth - 4f)
-                val endLatchPath = Path().apply {
-                    moveTo(ex, cy)
-                    lineTo(tinyBackX, cy)
-                    lineTo(ex, cy)
-                }
-                val stroke1 = GestureDescription.StrokeDescription(dragPath, 0L, durMs, true)
-                val gesture1 = GestureDescription.Builder().addStroke(stroke1).build()
-
-                return withTimeoutOrNull(durMs + endHoldMs + 250L) {
-                    suspendCancellableCoroutine<Boolean> { cont ->
-                        val d1 = dispatchGesture(gesture1, object : GestureResultCallback() {
-                            override fun onCompleted(gestureDescription: GestureDescription?) {
-                                val stroke2 = stroke1.continueStroke(endLatchPath, 0L, endHoldMs, false)
-                                val gesture2 = GestureDescription.Builder().addStroke(stroke2).build()
-                                val d2 = dispatchGesture(gesture2, object : GestureResultCallback() {
-                                    override fun onCompleted(gd2: GestureDescription?) {
-                                        if (cont.isActive) cont.resumeWith(Result.success(true))
-                                    }
-
-                                    override fun onCancelled(gd2: GestureDescription?) {
-                                        if (cont.isActive) cont.resumeWith(Result.success(false))
-                                    }
-                                }, null)
-                                if (!d2 && cont.isActive) {
-                                    cont.resumeWith(Result.success(false))
-                                }
-                            }
-
-                            override fun onCancelled(gestureDescription: GestureDescription?) {
-                                if (cont.isActive) cont.resumeWith(Result.success(false))
-                            }
-                        }, null)
-                        if (!d1 && cont.isActive) {
-                            cont.resumeWith(Result.success(false))
-                        }
-                    }
-                } ?: false
-            }
-
-            val fallbackGesture = GestureDescription.Builder()
+            val gesture = GestureDescription.Builder()
                 .addStroke(GestureDescription.StrokeDescription(dragPath, 0L, durMs))
                 .build()
-            return dispatchGestureAwaitingCompletion(fallbackGesture, durMs + 220L)
+            return dispatchGestureAwaitingCompletion(gesture, durMs + 220L)
         }
 
-        Log.i("LocateGoService", "⚡ Latched Full-End Swipe: duration=${durationMs}ms | RTL=$preferRtl (detected=$thumbOnRight) | X=$primaryStartX->$primaryEndX | Y=$cy")
-        val completed = dispatchLatchedFullEndSwipe(primaryStartX, primaryEndX, durationMs)
+        Log.i("LocateGoService", "⚡ Atomic Full-End Swipe: req=${durationMs}ms -> eff=${effectiveSliderMs}ms (${displayRefreshHz}Hz) | RTL=$preferRtl (detected=$thumbOnRight) | X=$primaryStartX->$primaryEndX | Y=$cy")
+        val completed = dispatchAtomicFullSwipe(primaryStartX, primaryEndX, effectiveSliderMs)
 
-        delay(14L)
+        delay(12L)
         val stillPresentAfterPrimary = isSliderStillOnSameRow()
         if (!stillPresentAfterPrimary && currentForegroundPackage.isNotBlank()) {
             packageLearnedRtl[currentForegroundPackage] = preferRtl
         }
 
         if (allowOppositeFallback && stillPresentAfterPrimary) {
-            // إذا كان الاتجاه مختلفاً ولم يتغير الشريط، نجرب الاتجاه العكسي فوراً بنفس الآلية المضمونة للنهاية
-            val altStartX = if (preferRtl) ltrStartX else rtlStartX
-            val altEndX = if (preferRtl) ltrEndX else rtlEndX
-            val altDuration = durationMs.coerceAtLeast(if (durationMs < 40L) 40L else durationMs)
-            Log.i("LocateGoService", "⚡ Opposite latched swipe fallback: duration=${altDuration}ms | X=$altStartX->$altEndX | Y=$cy")
-            dispatchLatchedFullEndSwipe(altStartX, altEndX, altDuration)
+            if (thumbOnRight != null) {
+                // الاتجاه مؤكد برمجياً من موضع الدائرة: نعيد السحب في نفس الاتجاه بسرعة أهدأ قليلاً لضمان التقاط النهاية 100%
+                val reinforceMs = (effectiveSliderMs + 35L).coerceAtMost(130L)
+                Log.i("LocateGoService", "⚡ Same-direction firm retry: duration=${reinforceMs}ms | X=$primaryStartX->$primaryEndX | Y=$cy")
+                dispatchAtomicFullSwipe(primaryStartX, primaryEndX, reinforceMs)
+            } else {
+                // الاتجاه لم يكن محدداً مسبقاً: نجرب الاتجاه العكسي فوراً
+                val altStartX = if (preferRtl) ltrStartX else rtlStartX
+                val altEndX = if (preferRtl) ltrEndX else rtlEndX
+                val altDuration = effectiveSliderMs.coerceAtLeast(65L)
+                Log.i("LocateGoService", "⚡ Opposite atomic swipe fallback: duration=${altDuration}ms | X=$altStartX->$altEndX | Y=$cy")
+                dispatchAtomicFullSwipe(altStartX, altEndX, altDuration)
 
-            delay(14L)
-            if (!isSliderStillOnSameRow() && currentForegroundPackage.isNotBlank()) {
-                packageLearnedRtl[currentForegroundPackage] = !preferRtl
+                delay(12L)
+                if (!isSliderStillOnSameRow() && currentForegroundPackage.isNotBlank()) {
+                    packageLearnedRtl[currentForegroundPackage] = !preferRtl
+                }
             }
         }
 
