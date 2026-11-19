@@ -413,16 +413,16 @@ class LocateGoAccessibilityService : AccessibilityService() {
     }
 
     /**
-     * عزل حاوية كل بطاقة طلب على حدة عند وجود أكثر من طلب في الشاشة
+     * عزل حاوية كل بطاقة طلب على حدة والتأكد من أنها تحتوي مسافة واحدة تخص هذه البطاقة فقط ولا تضم بطاقة أخرى
      */
-    private fun findIsolatedOrderCardRoot(
+    private fun scanIsolatedOrderCardRoot(
         candidate: AcceptCandidate,
         allCandidates: List<AcceptCandidate>,
         displayHeight: Int
-    ): AccessibilityNodeInfo? {
+    ): FastScanResult? {
         var current: AccessibilityNodeInfo? = candidate.node.parent
-        var bestCardRoot: AccessibilityNodeInfo? = null
-        val maxCardHeight = (displayHeight * 0.75f).toInt()
+        var bestCardScan: FastScanResult? = null
+        val maxCardHeight = (displayHeight * 0.72f).toInt()
 
         while (current != null) {
             val className = current.className?.toString()?.lowercase() ?: ""
@@ -448,16 +448,91 @@ class LocateGoAccessibilityService : AccessibilityService() {
                 break
             }
 
-            if (cBounds.height() >= candidate.bounds.height() + 24) {
-                bestCardRoot = current
+            if (cBounds.height() >= candidate.bounds.height() + 60) {
+                val probeScan = FastScanResult()
+                fastSinglePassTraversal(current, probeScan, displayHeight, collectButtons = false)
+                // توقف فوراً إذا احتوت الحاوية الأب على أكثر من بطاقة طلب (أكثر من صف موقعك/المتجر)
+                if (probeScan.driverAnchors.size > 1 || probeScan.storeAnchors.size > 1) {
+                    break
+                }
+                if (extractAllDistancesFromTexts(probeScan.texts).isNotEmpty()) {
+                    resolveSpatialRowDistances(probeScan)
+                    bestCardScan = probeScan
+                }
             }
             current = current.parent
         }
-        return bestCardRoot
+        return bestCardScan
     }
 
     /**
-     * فحص الشاشة بدقة فائقة: يدعم قبول طلب واحد أو عدة طلبات متزامنة بنفس الشاشة أو متتالية بنفس المسافات
+     * عزل نصوص ومسافات البطاقة مكانياً حسب موقع شريط السحب الفعلي (أعلى الشريط هو محتوى البطاقة دائماً)
+     */
+    private fun evaluateCandidateByYBand(
+        cand: AcceptCandidate,
+        idx: Int,
+        candidates: List<AcceptCandidate>,
+        scanResult: FastScanResult,
+        displayHeight: Int
+    ): EvaluatedOrderCard {
+        val prevBottom = if (idx > 0) candidates[idx - 1].bounds.bottom + 4 else 0
+        var bandTop = prevBottom
+        val bandBottom = (cand.bounds.bottom + 24).coerceAtMost(displayHeight)
+
+        // إذا رُصد شريط واحد فقط رغم وجود أكثر من بطاقة طلب في الشاشة، نقصر النطاق على البطاقة الأقرب فوق هذا الشريط
+        if (candidates.size == 1) {
+            val anchorsAbove = (scanResult.storeAnchors + scanResult.driverAnchors)
+                .map { it.second }
+                .filter { it in 0..cand.bounds.top }
+                .sorted()
+            if (anchorsAbove.size >= 2) {
+                // اختيار البطاقة صاحبة الصف الأقرب مباشرة أعلى شريط السحب
+                val targetAnchorY = anchorsAbove.last()
+                val earlierAnchorY = anchorsAbove.lastOrNull { kotlin.math.abs(targetAnchorY - it) > 140 }
+                if (earlierAnchorY != null) {
+                    bandTop = maxOf(bandTop, earlierAnchorY + 90)
+                }
+            }
+        }
+
+        val bandTextsPrimary = scanResult.positionedTexts
+            .filter { (y, _) -> y in bandTop..bandBottom }
+            .map { it.second }
+
+        // احتياط فقط للواجهات النادرة التي يظهر فيها زر القبول أعلى البطاقة وليس أسفلها
+        val useTopButtonFallbackBand = extractAllDistancesFromTexts(bandTextsPrimary).isEmpty() && idx < candidates.lastIndex
+        val finalTop = if (useTopButtonFallbackBand) (cand.bounds.top - 24).coerceAtLeast(prevBottom) else bandTop
+        val finalBottom = if (useTopButtonFallbackBand) (candidates[idx + 1].bounds.top - 12).coerceAtLeast(bandBottom) else bandBottom
+
+        val slicedTexts = scanResult.positionedTexts
+            .filter { (y, _) -> y in finalTop..finalBottom }
+            .map { it.second }
+
+        val bandScan = FastScanResult()
+        bandScan.positionedDistances.addAll(
+            scanResult.positionedDistances.filter { (_, y, _) -> y in finalTop..finalBottom }
+        )
+        scanResult.driverAnchors.lastOrNull { (_, y) -> y in finalTop..finalBottom }?.let {
+            bandScan.driverAnchorX = it.first
+            bandScan.driverAnchorY = it.second
+        }
+        scanResult.storeAnchors.lastOrNull { (_, y) -> y in finalTop..finalBottom }?.let {
+            bandScan.storeAnchorX = it.first
+            bandScan.storeAnchorY = it.second
+        }
+        resolveSpatialRowDistances(bandScan)
+
+        return evaluateTextsAgainstRules(
+            texts = slicedTexts,
+            directDeliveryKm = bandScan.directDeliveryKm,
+            directPickupKm = bandScan.directPickupKm,
+            directPayoutSar = null,
+            candidate = cand
+        )
+    }
+
+    /**
+     * فحص الشاشة بدقة فائقة: يربط كل شريط سحب ببطاقته ومسافاته حصراً (1-to-1) سواءً لطلب واحد أو عدة طلبات
      */
     private fun inspectScreenForOrderOffer(root: AccessibilityNodeInfo, packageName: String) {
         if (isBatchGestureRunning) {
@@ -526,58 +601,27 @@ class LocateGoAccessibilityService : AccessibilityService() {
         val candidates = scanResult.acceptCandidates.sortedBy { it.bounds.centerY() }
         val evaluatedCards = mutableListOf<EvaluatedOrderCard>()
 
-        if (candidates.size > 1) {
-            // حالة وجود أكثر من طلب في نفس الشاشة: تقييم كل بطاقة طلب بشكل مستقل تماماً
+        if (candidates.isNotEmpty()) {
+            // تقييم كل شريط/زر قبول بشكل معزول ومقيد ببطاقته فقط (سواءً ظهر طلب واحد أو أكثر في الشاشة)
             for ((idx, cand) in candidates.withIndex()) {
-                val cardRoot = findIsolatedOrderCardRoot(cand, candidates, displayHeight)
-                if (cardRoot != null) {
-                    val cardScan = FastScanResult()
-                    fastSinglePassTraversal(cardRoot, cardScan, displayHeight, collectButtons = false)
-                    resolveSpatialRowDistances(cardScan)
-                    val cardTexts = if (cardScan.texts.isNotEmpty()) cardScan.texts else scanResult.texts
+                val isolatedScan = scanIsolatedOrderCardRoot(cand, candidates, displayHeight)
+                if (isolatedScan != null) {
                     evaluatedCards.add(
                         evaluateTextsAgainstRules(
-                            texts = cardTexts,
-                            directDeliveryKm = cardScan.directDeliveryKm,
-                            directPickupKm = cardScan.directPickupKm,
-                            directPayoutSar = cardScan.directPayoutSar,
+                            texts = isolatedScan.texts,
+                            directDeliveryKm = isolatedScan.directDeliveryKm,
+                            directPickupKm = isolatedScan.directPickupKm,
+                            directPayoutSar = isolatedScan.directPayoutSar,
                             candidate = cand
                         )
                     )
                 } else {
-                    // عزل مكاني عمودي (Y-Band) في حال كانت الواجهة مسطحة (Compose/Flutter) بدون حاوية أب منفصلة
-                    val prevMidY = if (idx > 0) (candidates[idx - 1].bounds.centerY() + cand.bounds.centerY()) / 2 else 0
-                    val nextMidY = if (idx < candidates.lastIndex) (cand.bounds.centerY() + candidates[idx + 1].bounds.centerY()) / 2 else displayHeight
-                    val slicedTexts = scanResult.positionedTexts
-                        .filter { (y, _) -> y in prevMidY..nextMidY }
-                        .map { it.second }
-                    val bandScan = FastScanResult()
-                    bandScan.positionedDistances.addAll(
-                        scanResult.positionedDistances.filter { (_, y, _) -> y in prevMidY..nextMidY }
-                    )
-                    scanResult.driverAnchors.firstOrNull { (_, y) -> y in prevMidY..nextMidY }?.let {
-                        bandScan.driverAnchorX = it.first
-                        bandScan.driverAnchorY = it.second
-                    }
-                    scanResult.storeAnchors.firstOrNull { (_, y) -> y in prevMidY..nextMidY }?.let {
-                        bandScan.storeAnchorX = it.first
-                        bandScan.storeAnchorY = it.second
-                    }
-                    resolveSpatialRowDistances(bandScan)
-                    val cardTexts = if (slicedTexts.isNotEmpty()) slicedTexts else scanResult.texts
                     evaluatedCards.add(
-                        evaluateTextsAgainstRules(
-                            texts = cardTexts,
-                            directDeliveryKm = bandScan.directDeliveryKm,
-                            directPickupKm = bandScan.directPickupKm,
-                            directPayoutSar = null,
-                            candidate = cand
-                        )
+                        evaluateCandidateByYBand(cand, idx, candidates, scanResult, displayHeight)
                     )
                 }
             }
         } else {
-            // طلب واحد في الشاشة
             resolveSpatialRowDistances(scanResult)
             evaluatedCards.add(
                 evaluateTextsAgainstRules(
@@ -585,7 +629,7 @@ class LocateGoAccessibilityService : AccessibilityService() {
                     directDeliveryKm = scanResult.directDeliveryKm,
                     directPickupKm = scanResult.directPickupKm,
                     directPayoutSar = scanResult.directPayoutSar,
-                    candidate = candidates.firstOrNull()
+                    candidate = null
                 )
             )
         }
@@ -645,8 +689,10 @@ class LocateGoAccessibilityService : AccessibilityService() {
                             allowOppositeFallback = true,
                             isFollowUpInBatch = (index > 0)
                         )
-                    } else {
+                    } else if (scanResult.driverAnchors.size <= 1 && scanResult.storeAnchors.size <= 1) {
                         executeFallbackAccept(root)
+                    } else {
+                        false
                     }
 
                     Log.i(
