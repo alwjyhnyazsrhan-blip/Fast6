@@ -123,7 +123,7 @@ class LocateGoAccessibilityService : AccessibilityService() {
         @Volatile var liveMinPayoutSar: Double = 0.0
         @Volatile var liveAutoAccept: Boolean = true
         @Volatile var liveSoundAlerts: Boolean = true
-        @Volatile var liveSwipeSpeedMs: Long = 60L
+        @Volatile var liveSwipeSpeedMs: Long = 20L
         @Volatile var liveTapIntervalMs: Long = 10L
         @Volatile var liveEnableCustomInterval: Boolean = false
         @Volatile var liveOrderCardLanguage: String = "ar"
@@ -137,7 +137,7 @@ class LocateGoAccessibilityService : AccessibilityService() {
                 liveMinPayoutSar = prefs.getFloat("min_payout_sar", 0.0f).toDouble()
                 liveAutoAccept = prefs.getBoolean("auto_accept", true)
                 liveSoundAlerts = prefs.getBoolean("sound_alerts", true)
-                liveSwipeSpeedMs = prefs.getInt("swipe_speed_ms", 60).toLong().coerceIn(10L, 500L)
+                liveSwipeSpeedMs = prefs.getInt("swipe_speed_ms", 20).toLong().coerceIn(10L, 500L)
                 liveTapIntervalMs = prefs.getInt("tap_interval_ms", 10).toLong()
                 liveEnableCustomInterval = prefs.getBoolean("enable_custom_interval", false)
                 liveOrderCardLanguage = prefs.getString("order_card_language", "ar") ?: "ar"
@@ -232,7 +232,7 @@ class LocateGoAccessibilityService : AccessibilityService() {
                     }
                 }
                 "sound_alerts" -> liveSoundAlerts = sp.getBoolean("sound_alerts", true)
-                "swipe_speed_ms" -> liveSwipeSpeedMs = sp.getInt("swipe_speed_ms", 60).toLong().coerceIn(10L, 500L)
+                "swipe_speed_ms" -> liveSwipeSpeedMs = sp.getInt("swipe_speed_ms", 20).toLong().coerceIn(10L, 500L)
                 "tap_interval_ms" -> liveTapIntervalMs = sp.getInt("tap_interval_ms", 10).toLong()
                 "enable_custom_interval" -> liveEnableCustomInterval = sp.getBoolean("enable_custom_interval", false)
                 "order_card_language" -> liveOrderCardLanguage = sp.getString("order_card_language", "ar") ?: "ar"
@@ -428,10 +428,11 @@ class LocateGoAccessibilityService : AccessibilityService() {
     private fun scanIsolatedOrderCardRoot(
         candidate: AcceptCandidate,
         allCandidates: List<AcceptCandidate>,
+        scanResult: FastScanResult,
         displayHeight: Int
     ): FastScanResult? {
         var current: AccessibilityNodeInfo? = candidate.node.parent
-        var bestCardScan: FastScanResult? = null
+        var bestCardNode: AccessibilityNodeInfo? = null
         val maxCardHeight = (displayHeight * 0.72f).toInt()
 
         while (current != null) {
@@ -458,21 +459,30 @@ class LocateGoAccessibilityService : AccessibilityService() {
                 break
             }
 
+            // فحص O(1) في الذاكرة بدلاً من إعادة مسح الشجرة في كل مستوى
+            val driverAnchorsInside = scanResult.driverAnchors.count { (_, y) -> y in cBounds.top..cBounds.bottom }
+            val storeAnchorsInside = scanResult.storeAnchors.count { (_, y) -> y in cBounds.top..cBounds.bottom }
+            if (driverAnchorsInside > 1 || storeAnchorsInside > 1) {
+                break
+            }
+
             if (cBounds.height() >= candidate.bounds.height() + 60) {
-                val probeScan = FastScanResult()
-                fastSinglePassTraversal(current, probeScan, displayHeight, collectButtons = false)
-                // توقف فوراً إذا احتوت الحاوية الأب على أكثر من بطاقة طلب (أكثر من صف موقعك/المتجر)
-                if (probeScan.driverAnchors.size > 1 || probeScan.storeAnchors.size > 1) {
-                    break
-                }
-                if (extractAllDistancesFromTexts(probeScan.texts).isNotEmpty()) {
-                    resolveSpatialRowDistances(probeScan)
-                    bestCardScan = probeScan
-                }
+                bestCardNode = current
             }
             current = current.parent
         }
-        return bestCardScan
+
+        val targetNode = bestCardNode ?: return null
+        val probeScan = FastScanResult()
+        fastSinglePassTraversal(targetNode, probeScan, displayHeight, collectButtons = false)
+        if (probeScan.driverAnchors.size > 1 || probeScan.storeAnchors.size > 1) {
+            return null
+        }
+        if (extractAllDistancesFromTexts(probeScan.texts).isEmpty()) {
+            return null
+        }
+        resolveSpatialRowDistances(probeScan)
+        return probeScan
     }
 
     /**
@@ -618,7 +628,7 @@ class LocateGoAccessibilityService : AccessibilityService() {
         if (candidates.isNotEmpty()) {
             // تقييم كل شريط/زر قبول بشكل معزول ومقيد ببطاقته فقط (سواءً ظهر طلب واحد أو أكثر في الشاشة)
             for ((idx, cand) in candidates.withIndex()) {
-                val isolatedScan = scanIsolatedOrderCardRoot(cand, candidates, displayHeight)
+                val isolatedScan = scanIsolatedOrderCardRoot(cand, candidates, scanResult, displayHeight)
                 if (isolatedScan != null) {
                     evaluatedCards.add(
                         evaluateTextsAgainstRules(
@@ -738,7 +748,7 @@ class LocateGoAccessibilityService : AccessibilityService() {
                     }
 
                     if (index < matchingBatch.lastIndex) {
-                        delay(12L)
+                        delay(3L)
                     }
                 }
             } finally {
@@ -1133,9 +1143,9 @@ class LocateGoAccessibilityService : AccessibilityService() {
                 lineTo(cx, cy)
             }
             val tapGesture = GestureDescription.Builder()
-                .addStroke(GestureDescription.StrokeDescription(tapPath, 0L, durationMs.coerceIn(10L, 40L)))
+                .addStroke(GestureDescription.StrokeDescription(tapPath, 0L, durationMs.coerceIn(8L, 25L)))
                 .build()
-            val ok = dispatchGestureAwaitingCompletion(tapGesture, durationMs + 180L)
+            val ok = dispatchGestureAwaitingCompletion(tapGesture, durationMs + 100L)
 
             if (liveEnableCustomInterval) {
                 val tapDelay = liveTapIntervalMs.coerceIn(5L, 300L)
@@ -1186,12 +1196,15 @@ class LocateGoAccessibilityService : AccessibilityService() {
                     detectThumbStartsOnRight(p, bounds)
                 } else null
             }
-        val preferRtl = thumbOnRight ?: packageLearnedRtl[currentForegroundPackage] ?: (liveOrderCardLanguage == "ar")
+        val isLocateApp = currentForegroundPackage.lowercase().contains("locat")
+        val preferRtl = thumbOnRight
+            ?: packageLearnedRtl[currentForegroundPackage]
+            ?: if (isLocateApp) false else (liveOrderCardLanguage == "ar")
 
         val primaryStartX = if (preferRtl) rtlStartX else ltrStartX
         val primaryEndX = if (preferRtl) rtlEndX else ltrEndX
 
-        // حساب الحد الأدنى المضمون لالتقاط ACTION_MOVE + TouchSlop حسب تردد الشاشة (60Hz/90Hz/120Hz) لمنع التوقف في المنتصف
+        // حساب الحد الأدنى الفائق السرعة لالتقاط ACTION_MOVE دون التضحية باكتمال السحب حتى النهاية 100%
         val displayRefreshHz = try {
             val dm = getSystemService(Context.DISPLAY_SERVICE) as? android.hardware.display.DisplayManager
             dm?.getDisplay(android.view.Display.DEFAULT_DISPLAY)?.refreshRate ?: 60f
@@ -1199,13 +1212,16 @@ class LocateGoAccessibilityService : AccessibilityService() {
             60f
         }.coerceIn(30f, 240f)
         val frameMs = 1000f / displayRefreshHz
-        val minVSyncSliderMs = (frameMs * 4.0f).toLong().coerceIn(42L, 68L)
+        val minVSyncSliderMs = (frameMs * 2.1f).toLong().coerceIn(22L, 38L)
         val effectiveSliderMs = durationMs.coerceAtLeast(minVSyncSliderMs)
 
         fun isSliderStillOnSameRow(): Boolean {
             return try {
+                // فحص فوري أحادي للعنصر نفسه قبل اللجوء لأي بحث في الشجرة لتقليل زمن الاستجابة لأقل من 1ms
+                val stillAlive = try { node.refresh() && node.isVisibleToUser } catch (_: Exception) { false }
+                if (!stillAlive) return false
                 val currentRoot = rootInActiveWindow ?: findPackageWindowRoot(currentForegroundPackage) ?: return false
-                ACCEPT_SLIDER_KEYWORDS.any { kw ->
+                listOf("اسحب", "slide").any { kw ->
                     currentRoot.findAccessibilityNodeInfosByText(kw).any { found ->
                         val fb = Rect()
                         found.getBoundsInScreen(fb)
@@ -1218,28 +1234,27 @@ class LocateGoAccessibilityService : AccessibilityService() {
         }
 
         /**
-         * سحب أحادي متصل (Single Atomic Stroke) بدون فصل IPC:
-         * - يحترم حدود الشريط الفعلية [trackLeft+6 .. trackRight-6]
-         * - يمر عبر نقاط متعددة لتجاوز touchSlop من أول إطار ثم الوصول الكامل إلى 100% النهاية
+         * سحب أحادي فائق السرعة متصل (Single Atomic Stroke) بدون فصل IPC:
+         * - يمر عبر نقاط محسوبة لتجاوز touchSlop فوراً والوصول الكامل إلى 100% النهاية
          */
         suspend fun dispatchAtomicFullSwipe(sx: Float, ex: Float, durMs: Long): Boolean {
             val dragPath = Path().apply {
                 moveTo(sx, cy)
-                lineTo(sx + (ex - sx) * 0.18f, cy)
-                lineTo(sx + (ex - sx) * 0.52f, cy)
-                lineTo(sx + (ex - sx) * 0.86f, cy)
+                lineTo(sx + (ex - sx) * 0.22f, cy)
+                lineTo(sx + (ex - sx) * 0.58f, cy)
+                lineTo(sx + (ex - sx) * 0.88f, cy)
                 lineTo(ex, cy)
             }
             val gesture = GestureDescription.Builder()
                 .addStroke(GestureDescription.StrokeDescription(dragPath, 0L, durMs))
                 .build()
-            return dispatchGestureAwaitingCompletion(gesture, durMs + 220L)
+            return dispatchGestureAwaitingCompletion(gesture, durMs + 120L)
         }
 
-        Log.i("LocateGoService", "⚡ Atomic Full-End Swipe: req=${durationMs}ms -> eff=${effectiveSliderMs}ms (${displayRefreshHz}Hz) | RTL=$preferRtl (detected=$thumbOnRight) | X=$primaryStartX->$primaryEndX | Y=$cy")
+        Log.i("LocateGoService", "⚡ Ultra-Fast Atomic Swipe: req=${durationMs}ms -> eff=${effectiveSliderMs}ms (${displayRefreshHz}Hz) | RTL=$preferRtl (detected=$thumbOnRight) | X=$primaryStartX->$primaryEndX | Y=$cy")
         val completed = dispatchAtomicFullSwipe(primaryStartX, primaryEndX, effectiveSliderMs)
 
-        delay(12L)
+        delay(4L)
         val stillPresentAfterPrimary = isSliderStillOnSameRow()
         if (!stillPresentAfterPrimary && currentForegroundPackage.isNotBlank()) {
             packageLearnedRtl[currentForegroundPackage] = preferRtl
@@ -1247,19 +1262,17 @@ class LocateGoAccessibilityService : AccessibilityService() {
 
         if (allowOppositeFallback && stillPresentAfterPrimary) {
             if (thumbOnRight != null) {
-                // الاتجاه مؤكد برمجياً من موضع الدائرة: نعيد السحب في نفس الاتجاه بسرعة أهدأ قليلاً لضمان التقاط النهاية 100%
-                val reinforceMs = (effectiveSliderMs + 35L).coerceAtMost(130L)
-                Log.i("LocateGoService", "⚡ Same-direction firm retry: duration=${reinforceMs}ms | X=$primaryStartX->$primaryEndX | Y=$cy")
+                val reinforceMs = (effectiveSliderMs + 16L).coerceAtMost(70L)
+                Log.i("LocateGoService", "⚡ Fast same-direction retry: duration=${reinforceMs}ms | X=$primaryStartX->$primaryEndX | Y=$cy")
                 dispatchAtomicFullSwipe(primaryStartX, primaryEndX, reinforceMs)
             } else {
-                // الاتجاه لم يكن محدداً مسبقاً: نجرب الاتجاه العكسي فوراً
                 val altStartX = if (preferRtl) ltrStartX else rtlStartX
                 val altEndX = if (preferRtl) ltrEndX else rtlEndX
-                val altDuration = effectiveSliderMs.coerceAtLeast(65L)
-                Log.i("LocateGoService", "⚡ Opposite atomic swipe fallback: duration=${altDuration}ms | X=$altStartX->$altEndX | Y=$cy")
+                val altDuration = effectiveSliderMs.coerceAtLeast(38L)
+                Log.i("LocateGoService", "⚡ Fast opposite swipe fallback: duration=${altDuration}ms | X=$altStartX->$altEndX | Y=$cy")
                 dispatchAtomicFullSwipe(altStartX, altEndX, altDuration)
 
-                delay(12L)
+                delay(4L)
                 if (!isSliderStillOnSameRow() && currentForegroundPackage.isNotBlank()) {
                     packageLearnedRtl[currentForegroundPackage] = !preferRtl
                 }

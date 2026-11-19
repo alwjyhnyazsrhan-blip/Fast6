@@ -227,7 +227,7 @@ export const AndroidNativeControls: React.FC<AndroidNativeControlsProps> = ({
           </div>
           <span className="text-[11px] text-teal-300 font-medium flex items-center gap-1">
             <Zap className="w-3 h-3 text-teal-400" />
-            تحكم مزدوج: المطعم (≤ {settings.maxPickupDistanceKm ?? 1.5} كم) • العميل (≤ {settings.maxDistanceKm ?? 3.0} كم) • سحب فائق ({settings.swipeSpeedMs ?? 60}ms)
+            تحكم مزدوج: المطعم (≤ {settings.maxPickupDistanceKm ?? 1.5} كم) • العميل (≤ {settings.maxDistanceKm ?? 3.0} كم) • سحب فائق ({settings.swipeSpeedMs ?? 20}ms)
           </span>
         </div>
 
@@ -269,7 +269,7 @@ export const AndroidNativeControls: React.FC<AndroidNativeControlsProps> = ({
           <span>•</span>
           <span>نطاق المطعم: <strong className="text-teal-400 font-bold">{settings.maxPickupDistanceKm ?? 1.5} كم</strong></span>
           <span>•</span>
-          <span>آلية القبول: <strong className="text-teal-300 font-bold">سحب فوري ({settings.swipeSpeedMs ?? 60}ms)</strong></span>
+          <span>آلية القبول: <strong className="text-teal-300 font-bold">سحب فوري ({settings.swipeSpeedMs ?? 20}ms)</strong></span>
           <span>•</span>
           <span>القبول التلقائي: <strong className={settings.autoAccept ? 'text-emerald-400' : 'text-slate-400'}>{settings.autoAccept ? 'مفعل' : 'معطل'}</strong></span>
         </div>

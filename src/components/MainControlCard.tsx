@@ -343,7 +343,7 @@ export const MainControlCard: React.FC<MainControlCardProps> = ({
           <div className="p-3.5 bg-[#090d16] rounded-xl border border-indigo-500/30 text-center">
             <h4 className="text-xs font-bold text-slate-200 mb-1">سرعة السحب</h4>
             <div className="text-lg font-mono font-extrabold text-cyan-400 my-0.5">
-              {settings.swipeSpeedMs ?? 60} ms
+              {settings.swipeSpeedMs ?? 20} ms
             </div>
             <div className="grid grid-cols-4 gap-1 my-1.5">
               {[10, 20, 30, 40, 60, 100, 150, 200].map((preset) => (
@@ -351,7 +351,7 @@ export const MainControlCard: React.FC<MainControlCardProps> = ({
                   key={preset}
                   onClick={() => onUpdateSettings({ swipeSpeedMs: preset })}
                   className={`py-1 rounded text-[11px] font-mono font-bold transition-all cursor-pointer ${
-                    (settings.swipeSpeedMs ?? 60) === preset
+                    (settings.swipeSpeedMs ?? 20) === preset
                       ? 'bg-cyan-500 text-slate-950 font-bold shadow-sm'
                       : 'bg-slate-800 hover:bg-slate-700 text-slate-300'
                   }`}
