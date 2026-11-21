@@ -1097,10 +1097,10 @@ class LocateGoAccessibilityService : AccessibilityService() {
      */
     private suspend fun performAcceptSuspended(
         node: AccessibilityNodeInfo?,
-        preBounds: Rect? = null,
         isSlider: Boolean,
         allowOppositeFallback: Boolean = true,
-        isFollowUpInBatch: Boolean = false
+        isFollowUpInBatch: Boolean = false,
+        preBounds: Rect? = null
     ): Boolean {
         if (Build.VERSION.SDK_INT < Build.VERSION_CODES.N) return false
         if (node == null) return false
@@ -1313,7 +1313,7 @@ class LocateGoAccessibilityService : AccessibilityService() {
                     node.getBoundsInScreen(bounds)
                     if (bounds.width() > 60) {
                         val isSlider = ACCEPT_SLIDER_KEYWORDS.any { keyword.contains(it, ignoreCase = true) }
-                        if (performAcceptSuspended(node, isSlider)) return true
+                        if (performAcceptSuspended(node, isSlider = isSlider, preBounds = bounds)) return true
                     }
                 }
             }
@@ -1325,7 +1325,7 @@ class LocateGoAccessibilityService : AccessibilityService() {
             if (nodes.isNotEmpty()) {
                 for (node in nodes) {
                     val isSlider = viewId.contains("slide") || viewId.contains("swipe")
-                    if (performAcceptSuspended(node, isSlider)) return true
+                    if (performAcceptSuspended(node, isSlider = isSlider)) return true
                 }
             }
         }
