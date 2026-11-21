@@ -123,7 +123,7 @@ class LocateGoAccessibilityService : AccessibilityService() {
         @Volatile var liveMinPayoutSar: Double = 0.0
         @Volatile var liveAutoAccept: Boolean = true
         @Volatile var liveSoundAlerts: Boolean = true
-        @Volatile var liveSwipeSpeedMs: Long = 20L
+        @Volatile var liveSwipeSpeedMs: Long = 10L
         @Volatile var liveTapIntervalMs: Long = 10L
         @Volatile var liveEnableCustomInterval: Boolean = false
         @Volatile var liveOrderCardLanguage: String = "ar"
@@ -137,7 +137,7 @@ class LocateGoAccessibilityService : AccessibilityService() {
                 liveMinPayoutSar = prefs.getFloat("min_payout_sar", 0.0f).toDouble()
                 liveAutoAccept = prefs.getBoolean("auto_accept", true)
                 liveSoundAlerts = prefs.getBoolean("sound_alerts", true)
-                liveSwipeSpeedMs = prefs.getInt("swipe_speed_ms", 20).toLong().coerceIn(10L, 500L)
+                liveSwipeSpeedMs = prefs.getInt("swipe_speed_ms", 10).toLong().coerceIn(10L, 500L)
                 liveTapIntervalMs = prefs.getInt("tap_interval_ms", 10).toLong()
                 liveEnableCustomInterval = prefs.getBoolean("enable_custom_interval", false)
                 liveOrderCardLanguage = prefs.getString("order_card_language", "ar") ?: "ar"
@@ -188,12 +188,29 @@ class LocateGoAccessibilityService : AccessibilityService() {
         Pattern.CASE_INSENSITIVE or Pattern.UNICODE_CASE
     )
 
+    private val kmPattern = Pattern.compile(
+        "(\\d+(?:[.,]\\d+)?)\\s*(?:كم|كيلو|km|k\\.m)",
+        Pattern.CASE_INSENSITIVE or Pattern.UNICODE_CASE
+    )
+    private val meterPattern = Pattern.compile(
+        "(?<![:\\d.])(\\d{2,4})\\s*(?:متر|امتار|أمتار|meters?|meter|m|م)(?=$|[\\s\\)\\]،,.])",
+        Pattern.CASE_INSENSITIVE or Pattern.UNICODE_CASE
+    )
+    private val bidiStripRegex = Regex("[\\u200E\\u200F\\u202A-\\u202E\\u2066-\\u2069]")
+
+    private var cachedDisplayRefreshHz: Float = 60f
     private var currentForegroundPackage = ""
     private val processedOrdersCache = ConcurrentHashMap<String, Long>()
 
     override fun onServiceConnected() {
         super.onServiceConnected()
         renderClient = RenderApiClient(this)
+        cachedDisplayRefreshHz = try {
+            val dm = getSystemService(Context.DISPLAY_SERVICE) as? android.hardware.display.DisplayManager
+            dm?.getDisplay(android.view.Display.DEFAULT_DISPLAY)?.refreshRate ?: 60f
+        } catch (_: Exception) {
+            60f
+        }.coerceIn(30f, 240f)
 
         // 1. تهيئة خدمة Accessibility بأقصى سرعة ممكنة وبدون أي تأخير (Zero Throttling)
         val info = serviceInfo ?: AccessibilityServiceInfo()
@@ -211,7 +228,7 @@ class LocateGoAccessibilityService : AccessibilityService() {
         // 2. تفعيل ذاكرة الإعدادات الفورية
         initLiveSettingsCache()
 
-        Log.i("LocateGoService", "⚡⚡ ULTRA ZERO-DELAY Auto-Accept Engine ACTIVATED (Timeout=0ms • Single-Pass O(N) Scanner • Dual RTL/LTR Swipe & Tap).")
+        Log.i("LocateGoService", "⚡⚡ ULTRA ZERO-DELAY Auto-Accept Engine ACTIVATED (${cachedDisplayRefreshHz}Hz • Timeout=0ms).")
     }
 
     private fun initLiveSettingsCache() {
@@ -232,7 +249,7 @@ class LocateGoAccessibilityService : AccessibilityService() {
                     }
                 }
                 "sound_alerts" -> liveSoundAlerts = sp.getBoolean("sound_alerts", true)
-                "swipe_speed_ms" -> liveSwipeSpeedMs = sp.getInt("swipe_speed_ms", 20).toLong().coerceIn(10L, 500L)
+                "swipe_speed_ms" -> liveSwipeSpeedMs = sp.getInt("swipe_speed_ms", 10).toLong().coerceIn(10L, 500L)
                 "tap_interval_ms" -> liveTapIntervalMs = sp.getInt("tap_interval_ms", 10).toLong()
                 "enable_custom_interval" -> liveEnableCustomInterval = sp.getBoolean("enable_custom_interval", false)
                 "order_card_language" -> liveOrderCardLanguage = sp.getString("order_card_language", "ar") ?: "ar"
@@ -710,6 +727,7 @@ class LocateGoAccessibilityService : AccessibilityService() {
                     val accepted = if (cand != null) {
                         performAcceptSuspended(
                             node = cand.node,
+                            preBounds = cand.bounds,
                             isSlider = cand.isSlider,
                             allowOppositeFallback = true,
                             isFollowUpInBatch = (index > 0)
@@ -745,10 +763,6 @@ class LocateGoAccessibilityService : AccessibilityService() {
                                 deliveryDistanceKm = card.evalDeliveryKm
                             )
                         } catch (_: Exception) {}
-                    }
-
-                    if (index < matchingBatch.lastIndex) {
-                        delay(3L)
                     }
                 }
             } finally {
@@ -790,10 +804,17 @@ class LocateGoAccessibilityService : AccessibilityService() {
         }
     }
 
+    private fun containsAnyDigit(input: String): Boolean {
+        for (ch in input) {
+            if (ch in '0'..'9' || ch in '\u0660'..'\u0669' || ch in '\u06F0'..'\u06F9') return true
+        }
+        return false
+    }
+
     /**
-     * مسح شجرة العناصر في دورة أحادية فائقة الخفة:
-     * - رصد واصطياد جميع أشرطة القبول بالسحب أو أزرار القبول المباشرة فوراً (مع حظر أزرار الرفض Reject والإلغاء وأيقونات GPS).
-     * - استخراج نصوص المسافات والأسعار والمتاجر.
+     * مسح شجرة العناصر في دورة أحادية فائقة الخفة (<2ms):
+     * - تخطي عقد الخريطة والرسومات غير النصية فوراً لتفادي بطء التحديثات الحية.
+     * - رصد أشرطة القبول وأزرار القبول مباشرة، وقصر فحص المسافات على النصوص المحتوية على أرقام فقط.
      */
     private fun fastSinglePassTraversal(
         node: AccessibilityNodeInfo?,
@@ -802,6 +823,15 @@ class LocateGoAccessibilityService : AccessibilityService() {
         collectButtons: Boolean = true
     ) {
         if (node == null) return
+
+        val nodeClass = node.className?.toString()?.lowercase() ?: ""
+        if (nodeClass.contains("mapview") ||
+            nodeClass.contains("surfaceview") ||
+            nodeClass.contains("textureview") ||
+            nodeClass.contains("webview")
+        ) {
+            return
+        }
 
         val text = node.text?.toString()?.trim()
         val desc = node.contentDescription?.toString()?.trim()
@@ -863,12 +893,13 @@ class LocateGoAccessibilityService : AccessibilityService() {
             }
         }
 
-        // 2. إضافة النص المؤهل وفحص المسافات المباشرة والمكانية (يدعم النصوص المدمجة الطويلة في Compose/Flutter)
+        // 2. إضافة النص المؤهل وفحص المسافات المباشرة والمكانية بدون أي إبطاء
         if (rawContent != null && rawContent.length in 2..1500) {
             val lowerStr = rawContent.lowercase()
             val isIgnored = IGNORED_NAV_TEXTS.any { lowerStr == it || lowerStr.startsWith("$it ") }
             if (!isIgnored) {
-                val normalizedContent = normalizeArabicDigits(rawContent)
+                val hasDigits = containsAnyDigit(rawContent)
+                val normalizedContent = if (hasDigits) normalizeArabicDigits(rawContent) else rawContent
                 result.texts.add(normalizedContent)
 
                 val tb = Rect()
@@ -877,49 +908,53 @@ class LocateGoAccessibilityService : AccessibilityService() {
                     if (collectButtons) {
                         result.positionedTexts.add(tb.centerY() to normalizedContent)
                     }
-                    val anchorLabel = lowerStr
-                        .replace(Regex("[\\u200E\\u200F\\u202A-\\u202E\\u2066-\\u2069]"), "")
-                        .trim()
-                    if (anchorLabel == "موقعك" || anchorLabel == "الموقع" || anchorLabel.contains("your location")) {
-                        if (result.driverAnchorX == null) {
-                            result.driverAnchorX = tb.centerX()
-                            result.driverAnchorY = tb.centerY()
+                    if (!hasDigits && lowerStr.length <= 24) {
+                        val anchorLabel = lowerStr.replace(bidiStripRegex, "").trim()
+                        if (anchorLabel == "موقعك" || anchorLabel == "الموقع" || anchorLabel.contains("your location")) {
+                            if (result.driverAnchorX == null) {
+                                result.driverAnchorX = tb.centerX()
+                                result.driverAnchorY = tb.centerY()
+                            }
+                            result.driverAnchors.add(tb.centerX() to tb.centerY())
+                        } else if (anchorLabel == "المتجر" || anchorLabel == "المطعم" || anchorLabel == "store" || anchorLabel == "restaurant") {
+                            if (result.storeAnchorX == null) {
+                                result.storeAnchorX = tb.centerX()
+                                result.storeAnchorY = tb.centerY()
+                            }
+                            result.storeAnchors.add(tb.centerX() to tb.centerY())
                         }
-                        result.driverAnchors.add(tb.centerX() to tb.centerY())
-                    } else if (anchorLabel == "المتجر" || anchorLabel == "المطعم" || anchorLabel == "store" || anchorLabel == "restaurant") {
-                        if (result.storeAnchorX == null) {
-                            result.storeAnchorX = tb.centerX()
-                            result.storeAnchorY = tb.centerY()
+                    }
+                    if (hasDigits) {
+                        val singleDistList = extractAllDistancesFromTexts(listOf(normalizedContent))
+                        if (singleDistList.size == 1) {
+                            result.positionedDistances.add(Triple(tb.centerX(), tb.centerY(), singleDistList[0]))
                         }
-                        result.storeAnchors.add(tb.centerX() to tb.centerY())
-                    }
-                    val singleDistList = extractAllDistancesFromTexts(listOf(normalizedContent))
-                    if (singleDistList.size == 1) {
-                        result.positionedDistances.add(Triple(tb.centerX(), tb.centerY(), singleDistList[0]))
                     }
                 }
 
-                // فحص سريع لنصوص المسافات أثناء المرور لتسريع التحليل
-                if (result.directDeliveryKm == null && (lowerStr.contains("عميل") || lowerStr.contains("توصيل") || lowerStr.contains("وجهة") || lowerStr.contains("delivery") || lowerStr.contains("dropoff"))) {
-                    val m = deliveryDistancePattern.matcher(normalizedContent)
-                    if (m.find()) {
-                        val valStr = m.group(1) ?: m.group(2)
-                        result.directDeliveryKm = valStr?.replace(',', '.')?.toDoubleOrNull()
+                // فحص سريع لنصوص المسافات أثناء المرور فقط إذا كان النص يحتوي على أرقام
+                if (hasDigits) {
+                    if (result.directDeliveryKm == null && (lowerStr.contains("عميل") || lowerStr.contains("توصيل") || lowerStr.contains("وجهة") || lowerStr.contains("delivery") || lowerStr.contains("dropoff"))) {
+                        val m = deliveryDistancePattern.matcher(normalizedContent)
+                        if (m.find()) {
+                            val valStr = m.group(1) ?: m.group(2)
+                            result.directDeliveryKm = valStr?.replace(',', '.')?.toDoubleOrNull()
+                        }
                     }
-                }
 
-                if (result.directPickupKm == null && (lowerStr.contains("مطعم") || lowerStr.contains("متجر") || lowerStr.contains("استلام") || lowerStr.contains("pickup") || lowerStr.contains("store"))) {
-                    val m = pickupDistancePattern.matcher(normalizedContent)
-                    if (m.find()) {
-                        val valStr = m.group(1) ?: m.group(2)
-                        result.directPickupKm = valStr?.replace(',', '.')?.toDoubleOrNull()
+                    if (result.directPickupKm == null && (lowerStr.contains("مطعم") || lowerStr.contains("متجر") || lowerStr.contains("استلام") || lowerStr.contains("pickup") || lowerStr.contains("store"))) {
+                        val m = pickupDistancePattern.matcher(normalizedContent)
+                        if (m.find()) {
+                            val valStr = m.group(1) ?: m.group(2)
+                            result.directPickupKm = valStr?.replace(',', '.')?.toDoubleOrNull()
+                        }
                     }
-                }
 
-                if (result.directPayoutSar == null && (lowerStr.contains("ريال") || lowerStr.contains("ر.س") || lowerStr.contains("sar"))) {
-                    val m = payoutPattern.matcher(normalizedContent)
-                    if (m.find()) {
-                        result.directPayoutSar = m.group(1)?.replace(',', '.')?.toDoubleOrNull()
+                    if (result.directPayoutSar == null && (lowerStr.contains("ريال") || lowerStr.contains("ر.س") || lowerStr.contains("sar"))) {
+                        val m = payoutPattern.matcher(normalizedContent)
+                        if (m.find()) {
+                            result.directPayoutSar = m.group(1)?.replace(',', '.')?.toDoubleOrNull()
+                        }
                     }
                 }
             }
@@ -1062,6 +1097,7 @@ class LocateGoAccessibilityService : AccessibilityService() {
      */
     private suspend fun performAcceptSuspended(
         node: AccessibilityNodeInfo?,
+        preBounds: Rect? = null,
         isSlider: Boolean,
         allowOppositeFallback: Boolean = true,
         isFollowUpInBatch: Boolean = false
@@ -1075,21 +1111,19 @@ class LocateGoAccessibilityService : AccessibilityService() {
             return false
         }
 
-        val refreshed = try {
-            node.refresh()
-        } catch (_: Exception) {
-            true
-        }
-        if (isFollowUpInBatch && !refreshed) {
-            return false
-        }
-
         val displayMetrics = resources.displayMetrics
         val screenWidth = displayMetrics.widthPixels.toFloat()
         val screenHeight = displayMetrics.heightPixels.toFloat()
 
         val bounds = Rect()
-        node.getBoundsInScreen(bounds)
+        if (!isFollowUpInBatch && preBounds != null && !preBounds.isEmpty) {
+            bounds.set(preBounds)
+        } else {
+            val refreshed = try { node.refresh() } catch (_: Exception) { true }
+            if (isFollowUpInBatch && !refreshed) return false
+            node.getBoundsInScreen(bounds)
+        }
+
         val initialHeight = bounds.height().coerceAtLeast(32)
         val maxControlHeight = if (isSlider) {
             (screenHeight * 0.088f).toInt().coerceIn(135, 195)
@@ -1098,24 +1132,27 @@ class LocateGoAccessibilityService : AccessibilityService() {
         }
 
         var targetContainer: AccessibilityNodeInfo = node
-        var pNode: AccessibilityNodeInfo? = node.parent
-        var climbDepth = 0
-        while (pNode != null && climbDepth < 5) {
-            val pBounds = Rect()
-            pNode.getBoundsInScreen(pBounds)
-            val verticalShift = kotlin.math.abs(pBounds.centerY() - bounds.centerY())
-            if (pBounds.width() >= bounds.width() &&
-                pBounds.height() in initialHeight..maxControlHeight &&
-                verticalShift < 48 &&
-                pBounds.height() < (screenHeight * 0.11f) &&
-                !containsForbiddenControl(pNode)
-            ) {
-                bounds.set(pBounds)
-                targetContainer = pNode
-                pNode = pNode.parent
-                climbDepth++
-            } else {
-                break
+        // إذا كان العنصر نفسه عريضاً بكامل عرض الشريط تقريباً نتخطى تسلق الأب لتسريع الانطلاق إلى 0ms
+        if (!isSlider || bounds.width() < screenWidth * 0.58f) {
+            var pNode: AccessibilityNodeInfo? = node.parent
+            var climbDepth = 0
+            while (pNode != null && climbDepth < 4) {
+                val pBounds = Rect()
+                pNode.getBoundsInScreen(pBounds)
+                val verticalShift = kotlin.math.abs(pBounds.centerY() - bounds.centerY())
+                if (pBounds.width() >= bounds.width() &&
+                    pBounds.height() in initialHeight..maxControlHeight &&
+                    verticalShift < 48 &&
+                    pBounds.height() < (screenHeight * 0.11f) &&
+                    !containsForbiddenControl(pNode)
+                ) {
+                    bounds.set(pBounds)
+                    targetContainer = pNode
+                    pNode = pNode.parent
+                    climbDepth++
+                } else {
+                    break
+                }
             }
         }
 
@@ -1128,11 +1165,11 @@ class LocateGoAccessibilityService : AccessibilityService() {
         val cy = bounds.centerY().toFloat()
         val durationMs = liveSwipeSpeedMs.coerceIn(10L, 200L)
 
-        // إذا كان زر قبول مباشر وليس شريط سحب: نقر فوري مباشر على الزر أو حاويته القابلة للنقر
+        // إذا كان زر قبول مباشر وليس شريط سحب: نقر فوري مباشر
         if (!isSlider) {
             try {
                 var clickTarget: AccessibilityNodeInfo? = node
-                repeat(4) {
+                repeat(3) {
                     clickTarget?.performAction(AccessibilityNodeInfo.ACTION_CLICK)
                     clickTarget = clickTarget?.parent
                 }
@@ -1143,9 +1180,9 @@ class LocateGoAccessibilityService : AccessibilityService() {
                 lineTo(cx, cy)
             }
             val tapGesture = GestureDescription.Builder()
-                .addStroke(GestureDescription.StrokeDescription(tapPath, 0L, durationMs.coerceIn(8L, 25L)))
+                .addStroke(GestureDescription.StrokeDescription(tapPath, 0L, durationMs.coerceIn(8L, 20L)))
                 .build()
-            val ok = dispatchGestureAwaitingCompletion(tapGesture, durationMs + 100L)
+            val ok = dispatchGestureAwaitingCompletion(tapGesture, durationMs + 80L)
 
             if (liveEnableCustomInterval) {
                 val tapDelay = liveTapIntervalMs.coerceIn(5L, 300L)
@@ -1158,7 +1195,7 @@ class LocateGoAccessibilityService : AccessibilityService() {
             return ok
         }
 
-        // شريط السحب (Slider): سحب موحّد مضمون الوصول إلى 100% من مركز المقبض حتى نهاية المسار داخل حدود الشريط
+        // شريط السحب (Slider): سحب موحّد فائق السرعة من مركز المقبض حتى نهاية المسار
         val trackLeft = if (bounds.width() < screenWidth * 0.52f) {
             (screenWidth * 0.055f)
         } else {
@@ -1173,51 +1210,45 @@ class LocateGoAccessibilityService : AccessibilityService() {
         val effectiveHeight = bounds.height().toFloat().coerceIn(80f, 200f)
         val thumbCenterInset = (effectiveHeight * 0.45f).coerceIn(22f, 75f)
 
-        // البقاء داخل حدود الشريط الحقيقية مع الوصول الكامل لما بعد مركز موضع التوقف النهائي
         val ltrStartX = (trackLeft + thumbCenterInset).coerceIn(10f, screenWidth - 10f)
-        val ltrEndX = (trackRight - 4f).coerceAtMost(screenWidth - 4f)
+        val ltrEndX = (trackRight - 3f).coerceAtMost(screenWidth - 3f)
         val rtlStartX = (trackRight - thumbCenterInset).coerceIn(10f, screenWidth - 10f)
-        val rtlEndX = (trackLeft + 4f).coerceAtLeast(4f)
+        val rtlEndX = (trackLeft + 3f).coerceAtLeast(3f)
 
         if (trackRight <= trackLeft + 60f) {
             val tapPath = Path().apply { moveTo(cx, cy); lineTo(cx, cy) }
             val tapGesture = GestureDescription.Builder()
-                .addStroke(GestureDescription.StrokeDescription(tapPath, 0L, durationMs.coerceIn(10L, 40L)))
+                .addStroke(GestureDescription.StrokeDescription(tapPath, 0L, durationMs.coerceIn(8L, 20L)))
                 .build()
-            return dispatchGestureAwaitingCompletion(tapGesture, durationMs + 180L)
+            return dispatchGestureAwaitingCompletion(tapGesture, durationMs + 80L)
         }
 
-        // فحص موضع المقبض داخل الشريط أو داخل حاويته الأب مباشرة (إن لم يكن يضم أزرار رفض/GPS)
-        val thumbOnRight = detectThumbStartsOnRight(targetContainer, bounds)
-            ?: targetContainer.parent?.let { p ->
-                val pb = Rect()
-                p.getBoundsInScreen(pb)
-                if (pb.height() in bounds.height()..(bounds.height() * 2 + 40) && !containsForbiddenControl(p)) {
-                    detectThumbStartsOnRight(p, bounds)
-                } else null
-            }
-        val isLocateApp = currentForegroundPackage.lowercase().contains("locat")
-        val preferRtl = thumbOnRight
-            ?: packageLearnedRtl[currentForegroundPackage]
-            ?: if (isLocateApp) false else (liveOrderCardLanguage == "ar")
+        val isLocateApp = currentPkg.contains("locat")
+        val learnedRtl = packageLearnedRtl[currentForegroundPackage]
+        val thumbOnRight = when {
+            learnedRtl != null -> learnedRtl
+            isLocateApp -> false // شريط لوكيت دائماً مقبضه في اليسار والسحب لليمين
+            else -> detectThumbStartsOnRight(targetContainer, bounds)
+                ?: targetContainer.parent?.let { p ->
+                    val pb = Rect()
+                    p.getBoundsInScreen(pb)
+                    if (pb.height() in bounds.height()..(bounds.height() * 2 + 40) && !containsForbiddenControl(p)) {
+                        detectThumbStartsOnRight(p, bounds)
+                    } else null
+                }
+        }
+        val directionKnown = (learnedRtl != null || isLocateApp || thumbOnRight != null)
+        val preferRtl = thumbOnRight ?: (liveOrderCardLanguage == "ar")
 
         val primaryStartX = if (preferRtl) rtlStartX else ltrStartX
         val primaryEndX = if (preferRtl) rtlEndX else ltrEndX
 
-        // حساب الحد الأدنى الفائق السرعة لالتقاط ACTION_MOVE دون التضحية باكتمال السحب حتى النهاية 100%
-        val displayRefreshHz = try {
-            val dm = getSystemService(Context.DISPLAY_SERVICE) as? android.hardware.display.DisplayManager
-            dm?.getDisplay(android.view.Display.DEFAULT_DISPLAY)?.refreshRate ?: 60f
-        } catch (_: Exception) {
-            60f
-        }.coerceIn(30f, 240f)
-        val frameMs = 1000f / displayRefreshHz
-        val minVSyncSliderMs = (frameMs * 2.1f).toLong().coerceIn(22L, 38L)
+        val frameMs = 1000f / cachedDisplayRefreshHz
+        val minVSyncSliderMs = (frameMs * 1.15f).toLong().coerceIn(12L, 20L)
         val effectiveSliderMs = durationMs.coerceAtLeast(minVSyncSliderMs)
 
         fun isSliderStillOnSameRow(): Boolean {
             return try {
-                // فحص فوري أحادي للعنصر نفسه قبل اللجوء لأي بحث في الشجرة لتقليل زمن الاستجابة لأقل من 1ms
                 val stillAlive = try { node.refresh() && node.isVisibleToUser } catch (_: Exception) { false }
                 if (!stillAlive) return false
                 val currentRoot = rootInActiveWindow ?: findPackageWindowRoot(currentForegroundPackage) ?: return false
@@ -1233,46 +1264,35 @@ class LocateGoAccessibilityService : AccessibilityService() {
             }
         }
 
-        /**
-         * سحب أحادي فائق السرعة متصل (Single Atomic Stroke) بدون فصل IPC:
-         * - يمر عبر نقاط محسوبة لتجاوز touchSlop فوراً والوصول الكامل إلى 100% النهاية
-         */
         suspend fun dispatchAtomicFullSwipe(sx: Float, ex: Float, durMs: Long): Boolean {
             val dragPath = Path().apply {
                 moveTo(sx, cy)
-                lineTo(sx + (ex - sx) * 0.22f, cy)
-                lineTo(sx + (ex - sx) * 0.58f, cy)
-                lineTo(sx + (ex - sx) * 0.88f, cy)
+                lineTo(sx + (ex - sx) * 0.35f, cy)
+                lineTo(sx + (ex - sx) * 0.82f, cy)
                 lineTo(ex, cy)
             }
             val gesture = GestureDescription.Builder()
                 .addStroke(GestureDescription.StrokeDescription(dragPath, 0L, durMs))
                 .build()
-            return dispatchGestureAwaitingCompletion(gesture, durMs + 120L)
+            return dispatchGestureAwaitingCompletion(gesture, durMs + 90L)
         }
 
-        Log.i("LocateGoService", "⚡ Ultra-Fast Atomic Swipe: req=${durationMs}ms -> eff=${effectiveSliderMs}ms (${displayRefreshHz}Hz) | RTL=$preferRtl (detected=$thumbOnRight) | X=$primaryStartX->$primaryEndX | Y=$cy")
+        Log.i("LocateGoService", "⚡⚡ Turbo Swipe (${effectiveSliderMs}ms @ ${cachedDisplayRefreshHz}Hz): RTL=$preferRtl | X=$primaryStartX->$primaryEndX | Y=$cy")
         val completed = dispatchAtomicFullSwipe(primaryStartX, primaryEndX, effectiveSliderMs)
 
-        delay(4L)
-        val stillPresentAfterPrimary = isSliderStillOnSameRow()
-        if (!stillPresentAfterPrimary && currentForegroundPackage.isNotBlank()) {
-            packageLearnedRtl[currentForegroundPackage] = preferRtl
-        }
-
-        if (allowOppositeFallback && stillPresentAfterPrimary) {
-            if (thumbOnRight != null) {
-                val reinforceMs = (effectiveSliderMs + 16L).coerceAtMost(70L)
-                Log.i("LocateGoService", "⚡ Fast same-direction retry: duration=${reinforceMs}ms | X=$primaryStartX->$primaryEndX | Y=$cy")
-                dispatchAtomicFullSwipe(primaryStartX, primaryEndX, reinforceMs)
-            } else {
+        // عندما يكون اتجاه الشريط معروفاً (مثل لوكيت)، ننتقل فوراً بدون تأخير أو إعادة فحص الشجرة لتسريع القبول
+        if (!directionKnown && allowOppositeFallback) {
+            delay(3L)
+            val stillPresentAfterPrimary = isSliderStillOnSameRow()
+            if (!stillPresentAfterPrimary && currentForegroundPackage.isNotBlank()) {
+                packageLearnedRtl[currentForegroundPackage] = preferRtl
+            } else if (stillPresentAfterPrimary) {
                 val altStartX = if (preferRtl) ltrStartX else rtlStartX
                 val altEndX = if (preferRtl) ltrEndX else rtlEndX
-                val altDuration = effectiveSliderMs.coerceAtLeast(38L)
-                Log.i("LocateGoService", "⚡ Fast opposite swipe fallback: duration=${altDuration}ms | X=$altStartX->$altEndX | Y=$cy")
+                val altDuration = effectiveSliderMs.coerceAtLeast(24L)
                 dispatchAtomicFullSwipe(altStartX, altEndX, altDuration)
 
-                delay(4L)
+                delay(3L)
                 if (!isSliderStillOnSameRow() && currentForegroundPackage.isNotBlank()) {
                     packageLearnedRtl[currentForegroundPackage] = !preferRtl
                 }
@@ -1328,9 +1348,8 @@ class LocateGoAccessibilityService : AccessibilityService() {
 
     private fun extractAllDistancesFromTexts(texts: List<String>): List<Double> {
         val result = mutableListOf<Double>()
-        val kmPattern = Pattern.compile("(\\d+(?:[.,]\\d+)?)\\s*(?:كم|كيلو|km|k\\.m)", Pattern.CASE_INSENSITIVE or Pattern.UNICODE_CASE)
-        val meterPattern = Pattern.compile("(?<![:\\d.])(\\d{2,4})\\s*(?:متر|امتار|أمتار|meters?|meter|m|م)(?=$|[\\s\\)\\]،,.])", Pattern.CASE_INSENSITIVE or Pattern.UNICODE_CASE)
         for (item in texts) {
+            if (!containsAnyDigit(item)) continue
             val normalizedText = normalizeArabicDigits(item)
             val m = kmPattern.matcher(normalizedText)
             while (m.find()) {

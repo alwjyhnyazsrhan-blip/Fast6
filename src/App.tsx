@@ -123,7 +123,7 @@ export default function App() {
           autoAccept: parsed.autoAccept ?? true,
           soundAlerts: soundPref,
           vibrationFeedback: false,
-          swipeSpeedMs: parsed.swipeSpeedMs ?? 20,
+          swipeSpeedMs: parsed.swipeSpeedMs ?? 10,
           tapIntervalMs: parsed.tapIntervalMs ?? 10,
           enableCustomInterval: parsed.enableCustomInterval ?? false,
         };
@@ -135,7 +135,7 @@ export default function App() {
       autoAccept: true,
       soundAlerts: soundPref,
       vibrationFeedback: false,
-      swipeSpeedMs: 20,
+      swipeSpeedMs: 10,
       tapIntervalMs: 10,
       enableCustomInterval: false,
     };
@@ -560,7 +560,7 @@ export default function App() {
             soundAlerts: parsed.soundAlerts ?? prev.soundAlerts,
             minPayoutSar: parsed.minPayoutSar ?? prev.minPayoutSar,
             vibrationFeedback: parsed.vibrationFeedback ?? prev.vibrationFeedback,
-            swipeSpeedMs: parsed.swipeSpeedMs ?? prev.swipeSpeedMs ?? 20,
+            swipeSpeedMs: parsed.swipeSpeedMs ?? prev.swipeSpeedMs ?? 10,
             tapIntervalMs: parsed.tapIntervalMs ?? prev.tapIntervalMs ?? 10,
             enableCustomInterval: parsed.enableCustomInterval ?? prev.enableCustomInterval ?? false,
             orderCardLanguage: parsed.orderCardLanguage ?? prev.orderCardLanguage ?? 'ar',
